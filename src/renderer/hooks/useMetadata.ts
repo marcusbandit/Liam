@@ -1,0 +1,128 @@
+import { useState, useEffect, useCallback } from 'react';
+
+export interface SeriesMetadata {
+  seriesId?: string;
+  title?: string;
+  titleRomaji?: string;
+  titleEnglish?: string | null;
+  titleNative?: string;
+  genres?: string[];
+  description?: string;
+  poster?: string | null;
+  posterLocal?: string | null;
+  banner?: string | null;
+  bannerLocal?: string | null;
+  episodes?: EpisodeMetadata[];
+  fileEpisodes?: FileEpisode[];
+  folderPath?: string;
+  source?: string;
+  totalEpisodes?: number | null;
+  duration?: number | null;
+  season?: string | null;
+  seasonYear?: number | null;
+  averageScore?: number | null;
+  status?: string;
+  format?: string;
+  type?: 'series' | 'movie';
+  studios?: string[];
+  startDate?: string | null;
+  endDate?: string | null;
+  anilistId?: number;
+  [key: string]: unknown;
+}
+
+export interface EpisodeMetadata {
+  episodeNumber: number;
+  seasonNumber?: number | null;
+  title?: string;
+  description?: string | null;
+  airDate?: string | null;
+  thumbnail?: string | null;
+  thumbnailLocal?: string | null;
+  filePath?: string;
+  subtitlePath?: string | null;
+  subtitlePaths?: string[];
+}
+
+export interface FileEpisode {
+  episodeNumber: number;
+  seasonNumber?: number | null;
+  filePath: string;
+  subtitlePath: string | null;
+  subtitlePaths: string[];
+  filename: string;
+  title?: string;
+}
+
+const hasElectronAPI = typeof window !== 'undefined' && window.electronAPI;
+
+export function useMetadata() {
+  const [metadata, setMetadata] = useState<Record<string, SeriesMetadata>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadMetadata = useCallback(async () => {
+    try {
+      setLoading(true);
+      if (hasElectronAPI) {
+        const data = await window.electronAPI.loadMetadata();
+        setMetadata((data || {}) as Record<string, SeriesMetadata>);
+      } else {
+        console.warn('electronAPI not available, using empty metadata');
+        setMetadata({});
+      }
+      setError(null);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      setError(errorMessage);
+      console.error('Error loading metadata:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMetadata();
+  }, [loadMetadata]);
+
+  const saveMetadata = async (newMetadata: Record<string, SeriesMetadata>): Promise<void> => {
+    try {
+      if (hasElectronAPI) {
+        await window.electronAPI.saveMetadata(newMetadata as Record<string, unknown>);
+        await loadMetadata();
+      } else {
+        console.warn('electronAPI not available, cannot save metadata');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      setError(errorMessage);
+      throw err;
+    }
+  };
+
+  const updateSeriesMetadata = async (seriesId: string, seriesData: Partial<SeriesMetadata>): Promise<void> => {
+    try {
+      const updatedMetadata = {
+        ...metadata,
+        [seriesId]: {
+          ...metadata[seriesId],
+          ...seriesData,
+        },
+      };
+      await saveMetadata(updatedMetadata);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      setError(errorMessage);
+      throw err;
+    }
+  };
+
+  return {
+    metadata,
+    loading,
+    error,
+    loadMetadata,
+    saveMetadata,
+    updateSeriesMetadata,
+  };
+}

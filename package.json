@@ -1,0 +1,52 @@
+{
+  "name": "liam",
+  "private": true,
+  "version": "0.0.0",
+  "main": ".vite/build/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "bun run typecheck && vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . && bun run typecheck",
+    "preview": "vite preview",
+    "start": "bun run typecheck && electron-forge start",
+    "package": "bun run typecheck && electron-forge package",
+    "make": "bun run typecheck && electron-forge make"
+  },
+  "dependencies": {
+    "axios": "^1.13.2",
+    "electron-squirrel-startup": "^1.0.1",
+    "fuse.js": "^7.1.0",
+    "graphql": "^16.12.0",
+    "graphql-request": "^7.3.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.10.1"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.10.2",
+    "@electron-forge/maker-deb": "^7.10.2",
+    "@electron-forge/maker-rpm": "^7.10.2",
+    "@electron-forge/maker-squirrel": "^7.10.2",
+    "@electron-forge/maker-zip": "^7.10.2",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.10.2",
+    "@electron-forge/plugin-fuses": "^7.10.2",
+    "@electron-forge/plugin-vite": "^7.10.2",
+    "@electron/fuses": "^1.8.0",
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "concurrently": "^9.2.1",
+    "electron": "^39.2.6",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "wait-on": "^9.0.3"
+  }
+}

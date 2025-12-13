@@ -1,0 +1,73 @@
+import { contextBridge, ipcRenderer } from 'electron';
+
+interface ScanResult {
+  success: boolean;
+  count: number;
+}
+
+interface CacheStats {
+  count: number;
+  sizeBytes: number;
+}
+
+export interface ElectronAPI {
+  // Config
+  getFolderSources: () => Promise<string[]>;
+  addFolderSource: (folderPath: string) => Promise<boolean>;
+  removeFolderSource: (folderPath: string) => Promise<boolean>;
+  
+  // Folder scanning
+  selectFolder: () => Promise<string | null>;
+  scanFolder: (folderPath: string) => Promise<unknown>;
+  scanAllFolders: () => Promise<unknown>;
+  scanAndFetchMetadata: (folderPath: string) => Promise<ScanResult>;
+  
+  // Metadata
+  fetchMetadata: (seriesName: string) => Promise<unknown>;
+  fetchAnilistMetadata: (seriesName: string) => Promise<unknown>;
+  fetchMALMetadata: (seriesName: string) => Promise<unknown>;
+  fetchTVDBMetadata: (seriesName: string) => Promise<unknown>;
+  saveMetadata: (metadata: Record<string, unknown>) => Promise<boolean>;
+  loadMetadata: () => Promise<Record<string, unknown>>;
+  clearMetadata: () => Promise<boolean>;
+  getSeriesEpisodes: (seriesId: string) => Promise<unknown[]>;
+  
+  // Image cache
+  getImageCacheStats: () => Promise<CacheStats>;
+  clearImageCache: () => Promise<boolean>;
+  getImageCachePath: () => Promise<string>;
+}
+
+declare global {
+  interface Window {
+    electronAPI: ElectronAPI;
+  }
+}
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  // Config
+  getFolderSources: () => ipcRenderer.invoke('get-folder-sources'),
+  addFolderSource: (folderPath: string) => ipcRenderer.invoke('add-folder-source', folderPath),
+  removeFolderSource: (folderPath: string) => ipcRenderer.invoke('remove-folder-source', folderPath),
+  
+  // Folder scanning
+  selectFolder: () => ipcRenderer.invoke('select-folder'),
+  scanFolder: (folderPath: string) => ipcRenderer.invoke('scan-folder', folderPath),
+  scanAllFolders: () => ipcRenderer.invoke('scan-all-folders'),
+  scanAndFetchMetadata: (folderPath: string) => ipcRenderer.invoke('scan-and-fetch-metadata', folderPath),
+  
+  // Metadata
+  fetchMetadata: (seriesName: string) => ipcRenderer.invoke('fetch-metadata', seriesName),
+  fetchAnilistMetadata: (seriesName: string) => ipcRenderer.invoke('fetch-anilist-metadata', seriesName),
+  fetchMALMetadata: (seriesName: string) => ipcRenderer.invoke('fetch-mal-metadata', seriesName),
+  fetchTVDBMetadata: (seriesName: string) => ipcRenderer.invoke('fetch-tvdb-metadata', seriesName),
+  saveMetadata: (metadata: Record<string, unknown>) => ipcRenderer.invoke('save-metadata', metadata),
+  loadMetadata: () => ipcRenderer.invoke('load-metadata'),
+  clearMetadata: () => ipcRenderer.invoke('clear-metadata'),
+  getSeriesEpisodes: (seriesId: string) => ipcRenderer.invoke('get-series-episodes', seriesId),
+  
+  // Image cache
+  getImageCacheStats: () => ipcRenderer.invoke('get-image-cache-stats'),
+  clearImageCache: () => ipcRenderer.invoke('clear-image-cache'),
+  getImageCachePath: () => ipcRenderer.invoke('get-image-cache-path'),
+});
