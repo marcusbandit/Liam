@@ -242,14 +242,15 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
               const { videos } = await scanFolderForVideos(seriesPath, seasonFromFolder);
               
               if (videos.length > 0) {
-                const seriesName = cleanSeriesName(subDir);
+                const seriesName = cleanSeriesName(entry);
+                const seriesSeasonName = seriesName + (seasonFromFolder ? ` Season ${seasonFromFolder}` : '');
                 // Include season in seriesId to distinguish seasons
                 const baseId = subDir.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
                 const seriesId = seasonFromFolder 
                   ? `${baseId}_s${seasonFromFolder.toString().padStart(2, '0')}`
                   : baseId;
                 
-                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesName}"`);
+                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesSeasonName}"`);
                 
                 results.push({
                   id: seriesId,
