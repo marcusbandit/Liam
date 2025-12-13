@@ -1,95 +1,63 @@
-# Anime Media Player
+# React + Vite
 
-An Electron application for watching downloaded anime with metadata integration from AniList, MyAnimeList, and TVDB.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-## Features
+## Using Bun
 
-- **Folder Management**: Select and scan folders containing anime series (each subfolder is a series)
-- **Metadata Integration**: Automatically fetch metadata from AniList (priority), MyAnimeList, and TVDB
-- **Genre Organization**: Home page displays shows organized by genre
-- **Series Detail Pages**: View all episodes with metadata for each series
-- **Video Player**: Built-in player using Vidstack with subtitle support
-- **Local Metadata Storage**: Metadata is fetched once and stored locally
+This project uses [Bun](https://bun.sh) as the package manager and runtime.
 
-## Installation
+### Installation
+
+If you haven't installed Bun yet, install it:
 
 ```bash
-npm install
+curl -fsSL https://bun.sh/install | bash
 ```
 
-## Development
+### Setup
 
-To run in development mode:
-
-1. Start the Vite dev server:
-```bash
-npm run dev
-```
-
-2. In another terminal, start Electron:
-```bash
-npm start
-```
-
-Or use the combined command (if configured):
-```bash
-npm run dev:electron
-```
-
-## Building
-
-To package the application:
+Install dependencies:
 
 ```bash
-npm run package
+bun install
 ```
 
-To create distributables:
+### Development
+
+Start the development server:
 
 ```bash
-npm run make
+bun run dev
 ```
 
-## Usage
+### Build
 
-1. **Select Folder**: Go to Settings and select the folder containing your anime (each subfolder should be a series)
-2. **Scan Folder**: Click "Scan Folder" to discover all series and fetch metadata
-3. **Browse**: View shows organized by genre on the home page
-4. **Watch**: Click on a series to see episodes, then click an episode to play it
+Build for production:
 
-## Folder Structure
-
-Your anime folder should be structured like this:
-
-```
-/anime-folder/
-  ├── Series Name 1/
-  │   ├── Episode 01.mkv
-  │   ├── Episode 01.srt
-  │   ├── Episode 02.mkv
-  │   └── Episode 02.srt
-  ├── Series Name 2/
-  │   └── ...
-  └── ...
+```bash
+bun run build
 ```
 
-## Metadata Sources
+### Preview
 
-The app tries to fetch metadata in this order:
-1. AniList (GraphQL API - no key required)
-2. MyAnimeList (Jikan API - no key required)
-3. TVDB (requires API key - configure in settings if needed)
+Preview the production build:
 
-## Technologies
+```bash
+bun run preview
+```
 
-- Electron
-- React
-- Vite
-- Vidstack (media player)
-- AniList GraphQL API
-- MyAnimeList Jikan API
-- TVDB API
+### Lint
 
-## License
+Run ESLint:
 
-MIT
+```bash
+bun run lint
+```
+
+## React Compiler
+
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+
+## Expanding the ESLint configuration
+
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.

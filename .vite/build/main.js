@@ -9997,21 +9997,19 @@ function requireSupportsColor() {
   const tty = require$$1$2;
   const hasFlag2 = requireHasFlag();
   const { env } = process;
-  let flagForceColor;
+  let forceColor;
   if (hasFlag2("no-color") || hasFlag2("no-colors") || hasFlag2("color=false") || hasFlag2("color=never")) {
-    flagForceColor = 0;
+    forceColor = 0;
   } else if (hasFlag2("color") || hasFlag2("colors") || hasFlag2("color=true") || hasFlag2("color=always")) {
-    flagForceColor = 1;
+    forceColor = 1;
   }
-  function envForceColor() {
-    if ("FORCE_COLOR" in env) {
-      if (env.FORCE_COLOR === "true") {
-        return 1;
-      }
-      if (env.FORCE_COLOR === "false") {
-        return 0;
-      }
-      return env.FORCE_COLOR.length === 0 ? 1 : Math.min(Number.parseInt(env.FORCE_COLOR, 10), 3);
+  if ("FORCE_COLOR" in env) {
+    if (env.FORCE_COLOR === "true") {
+      forceColor = 1;
+    } else if (env.FORCE_COLOR === "false") {
+      forceColor = 0;
+    } else {
+      forceColor = env.FORCE_COLOR.length === 0 ? 1 : Math.min(parseInt(env.FORCE_COLOR, 10), 3);
     }
   }
   function translateLevel(level) {
@@ -10025,22 +10023,15 @@ function requireSupportsColor() {
       has16m: level >= 3
     };
   }
-  function supportsColor(haveStream, { streamIsTTY, sniffFlags = true } = {}) {
-    const noFlagForceColor = envForceColor();
-    if (noFlagForceColor !== void 0) {
-      flagForceColor = noFlagForceColor;
-    }
-    const forceColor = sniffFlags ? flagForceColor : noFlagForceColor;
+  function supportsColor(haveStream, streamIsTTY) {
     if (forceColor === 0) {
       return 0;
     }
-    if (sniffFlags) {
-      if (hasFlag2("color=16m") || hasFlag2("color=full") || hasFlag2("color=truecolor")) {
-        return 3;
-      }
-      if (hasFlag2("color=256")) {
-        return 2;
-      }
+    if (hasFlag2("color=16m") || hasFlag2("color=full") || hasFlag2("color=truecolor")) {
+      return 3;
+    }
+    if (hasFlag2("color=256")) {
+      return 2;
     }
     if (haveStream && !streamIsTTY && forceColor === void 0) {
       return 0;
@@ -10057,7 +10048,7 @@ function requireSupportsColor() {
       return 1;
     }
     if ("CI" in env) {
-      if (["TRAVIS", "CIRCLECI", "APPVEYOR", "GITLAB_CI", "GITHUB_ACTIONS", "BUILDKITE", "DRONE"].some((sign2) => sign2 in env) || env.CI_NAME === "codeship") {
+      if (["TRAVIS", "CIRCLECI", "APPVEYOR", "GITLAB_CI", "GITHUB_ACTIONS", "BUILDKITE"].some((sign2) => sign2 in env) || env.CI_NAME === "codeship") {
         return 1;
       }
       return min2;
@@ -10069,7 +10060,7 @@ function requireSupportsColor() {
       return 3;
     }
     if ("TERM_PROGRAM" in env) {
-      const version = Number.parseInt((env.TERM_PROGRAM_VERSION || "").split(".")[0], 10);
+      const version = parseInt((env.TERM_PROGRAM_VERSION || "").split(".")[0], 10);
       switch (env.TERM_PROGRAM) {
         case "iTerm.app":
           return version >= 3 ? 3 : 2;
@@ -10088,17 +10079,14 @@ function requireSupportsColor() {
     }
     return min2;
   }
-  function getSupportLevel(stream2, options = {}) {
-    const level = supportsColor(stream2, {
-      streamIsTTY: stream2 && stream2.isTTY,
-      ...options
-    });
+  function getSupportLevel(stream2) {
+    const level = supportsColor(stream2, stream2 && stream2.isTTY);
     return translateLevel(level);
   }
   supportsColor_1 = {
     supportsColor: getSupportLevel,
-    stdout: getSupportLevel({ isTTY: tty.isatty(1) }),
-    stderr: getSupportLevel({ isTTY: tty.isatty(2) })
+    stdout: translateLevel(supportsColor(true, tty.isatty(1))),
+    stderr: translateLevel(supportsColor(true, tty.isatty(2)))
   };
   return supportsColor_1;
 }

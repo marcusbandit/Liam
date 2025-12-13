@@ -1,3 +1,4 @@
+import Button from './subcomponents/Button';
 import { useState, useMemo } from 'react';
 import { useMetadata, type SeriesMetadata } from '../hooks/useMetadata';
 import { Link } from 'react-router-dom';
@@ -275,13 +276,14 @@ function MetadataTab() {
               <option value="status">Sort by Status</option>
               <option value="source">Sort by Source</option>
             </select>
-            <button
+            <Button
               className="sort-order-btn"
               onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
               title={sortOrder === 'asc' ? 'Ascending' : 'Descending'}
+              size="small"
             >
               {sortOrder === 'asc' ? '↑' : '↓'}
-            </button>
+            </Button>
           </div>
 
           <div className="view-toggle">
@@ -301,13 +303,15 @@ function MetadataTab() {
             </button>
           </div>
 
-          <button
-            className="button refresh-all-btn"
+          <Button
+            className="refresh-all-btn"
             onClick={handleBulkRefresh}
             disabled={bulkRefreshing || filteredSeries.length === 0}
+            variant="primary"
+            size="small"
           >
-            {bulkRefreshing ? '⟳ Refreshing...' : '⟳ Refresh All'}
-          </button>
+            {bulkRefreshing ? 'Refreshing...' : 'Refresh All'}
+          </Button>
         </div>
       </div>
 
@@ -426,8 +430,9 @@ function MetadataTab() {
                   <Link to={`/series/${seriesId}`} className="button-secondary view-btn">
                     View Series
                   </Link>
-                  <button
-                    className="button refresh-btn"
+                  <Button
+                    variant="primary"
+                    size="small"
                     onClick={() => handleRefresh(seriesId, seriesData.title || seriesId)}
                     disabled={refreshing[seriesId] || bulkRefreshing}
                   >
@@ -437,9 +442,9 @@ function MetadataTab() {
                         Refreshing...
                       </>
                     ) : (
-                      '⟳ Refresh'
+                      'Refresh'
                     )}
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>
