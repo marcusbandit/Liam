@@ -177,10 +177,11 @@ async function scanDirectory(rootPath) {
               const seasonFromFolder = extractSeasonNumber(subDir);
               const { videos } = await scanFolderForVideos(seriesPath, seasonFromFolder);
               if (videos.length > 0) {
-                const seriesName = cleanSeriesName(subDir);
+                const seriesName = cleanSeriesName(entry);
+                const seriesSeasonName = seriesName + (seasonFromFolder ? ` Season ${seasonFromFolder}` : "");
                 const baseId = subDir.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
                 const seriesId = seasonFromFolder ? `${baseId}_s${seasonFromFolder.toString().padStart(2, "0")}` : baseId;
-                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesName}"`);
+                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesSeasonName}"`);
                 results.push({
                   id: seriesId,
                   name: seriesName,
@@ -13780,8 +13781,8 @@ let mainWindow = null;
 function createWindow() {
   Menu.setApplicationMenu(null);
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: 1920,
+    height: 1080,
     minWidth: 800,
     minHeight: 600,
     webPreferences: {
@@ -13795,7 +13796,7 @@ function createWindow() {
     backgroundColor: "#0a0a0f"
   });
   {
-    mainWindow.loadFile(join$1(__dirname$1, `../renderer/${"main_window"}/index.html`));
+    mainWindow.loadURL("http://localhost:5173");
   }
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     console.error("Renderer failed to load:", errorCode, errorDescription);
@@ -13943,15 +13944,6 @@ ipcMain.handle("fetch-metadata", async (_event, searchName, seasonNumber) => {
   const seasonInfo = seasonNumber !== null && seasonNumber !== void 0 ? ` Season ${seasonNumber}` : "";
   console.log(`Fetching metadata for: "${searchName}"${seasonInfo}`);
   try {
-    const anilistData = await anilistHandler.searchAndFetchMetadata(searchName, seasonNumber);
-    if (anilistData) {
-      console.log(`  ✓ Found on AniList: ${anilistData.title}`);
-      return { ...anilistData, source: "anilist" };
-    }
-  } catch (error) {
-    console.log(`  ✗ AniList failed:`, error);
-  }
-  try {
     const malData = await malHandler.searchAndFetchMetadata(searchName, seasonNumber);
     if (malData) {
       console.log(`  ✓ Found on MAL: ${malData.title}`);
@@ -13959,6 +13951,15 @@ ipcMain.handle("fetch-metadata", async (_event, searchName, seasonNumber) => {
     }
   } catch (error) {
     console.log(`  ✗ MAL failed:`, error);
+  }
+  try {
+    const anilistData = await anilistHandler.searchAndFetchMetadata(searchName, seasonNumber);
+    if (anilistData) {
+      console.log(`  ✓ Found on AniList: ${anilistData.title}`);
+      return { ...anilistData, source: "anilist" };
+    }
+  } catch (error) {
+    console.log(`  ✗ AniList failed:`, error);
   }
   try {
     const tvdbData = await tvdbHandler.searchAndFetchMetadata(searchName, seasonNumber);
@@ -13972,19 +13973,19 @@ ipcMain.handle("fetch-metadata", async (_event, searchName, seasonNumber) => {
   console.log(`  ✗ No metadata found for: "${searchName}"${seasonInfo}`);
   return null;
 });
-ipcMain.handle("fetch-anilist-metadata", async (_event, seriesName, seasonNumber) => {
-  try {
-    return await anilistHandler.searchAndFetchMetadata(seriesName, seasonNumber);
-  } catch (error) {
-    console.error("Error fetching AniList metadata:", error);
-    throw error;
-  }
-});
 ipcMain.handle("fetch-mal-metadata", async (_event, seriesName, seasonNumber) => {
   try {
     return await malHandler.searchAndFetchMetadata(seriesName, seasonNumber);
   } catch (error) {
     console.error("Error fetching MAL metadata:", error);
+    throw error;
+  }
+});
+ipcMain.handle("fetch-anilist-metadata", async (_event, seriesName, seasonNumber) => {
+  try {
+    return await anilistHandler.searchAndFetchMetadata(seriesName, seasonNumber);
+  } catch (error) {
+    console.error("Error fetching AniList metadata:", error);
     throw error;
   }
 });

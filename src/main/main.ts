@@ -25,8 +25,8 @@ function createWindow(): void {
   Menu.setApplicationMenu(null);
 
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: 1920,
+    height: 1080,
     minWidth: 800,
     minHeight: 600,
     webPreferences: {
@@ -233,16 +233,6 @@ ipcMain.handle('fetch-metadata', async (_event, searchName: string, seasonNumber
   console.log(`Fetching metadata for: "${searchName}"${seasonInfo}`);
   
   try {
-    const anilistData = await anilistHandler.searchAndFetchMetadata(searchName, seasonNumber);
-    if (anilistData) {
-      console.log(`  ✓ Found on AniList: ${anilistData.title}`);
-      return { ...anilistData, source: 'anilist' };
-    }
-  } catch (error) {
-    console.log(`  ✗ AniList failed:`, error);
-  }
-
-  try {
     const malData = await malHandler.searchAndFetchMetadata(searchName, seasonNumber);
     if (malData) {
       console.log(`  ✓ Found on MAL: ${malData.title}`);
@@ -250,6 +240,16 @@ ipcMain.handle('fetch-metadata', async (_event, searchName: string, seasonNumber
     }
   } catch (error) {
     console.log(`  ✗ MAL failed:`, error);
+  }
+
+  try {
+    const anilistData = await anilistHandler.searchAndFetchMetadata(searchName, seasonNumber);
+    if (anilistData) {
+      console.log(`  ✓ Found on AniList: ${anilistData.title}`);
+      return { ...anilistData, source: 'anilist' };
+    }
+  } catch (error) {
+    console.log(`  ✗ AniList failed:`, error);
   }
 
   try {
@@ -266,20 +266,20 @@ ipcMain.handle('fetch-metadata', async (_event, searchName: string, seasonNumber
   return null;
 });
 
-ipcMain.handle('fetch-anilist-metadata', async (_event, seriesName: string, seasonNumber?: number | null) => {
-  try {
-    return await anilistHandler.searchAndFetchMetadata(seriesName, seasonNumber);
-  } catch (error) {
-    console.error('Error fetching AniList metadata:', error);
-    throw error;
-  }
-});
-
 ipcMain.handle('fetch-mal-metadata', async (_event, seriesName: string, seasonNumber?: number | null) => {
   try {
     return await malHandler.searchAndFetchMetadata(seriesName, seasonNumber);
   } catch (error) {
     console.error('Error fetching MAL metadata:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('fetch-anilist-metadata', async (_event, seriesName: string, seasonNumber?: number | null) => {
+  try {
+    return await anilistHandler.searchAndFetchMetadata(seriesName, seasonNumber);
+  } catch (error) {
+    console.error('Error fetching AniList metadata:', error);
     throw error;
   }
 });
