@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import type { EpisodeMetadata } from '../hooks/useMetadata';
+import { Play } from 'lucide-react';
 
 // Helper to convert local file path to media:// URL
 function getImageUrl(localPath?: string | null, remotePath?: string | null): string | null {
@@ -57,7 +58,7 @@ function EpisodeCard({ seriesId, episode, hasFile }: EpisodeCardProps) {
         )}
         {hasFile && (
           <div className="episode-play-overlay">
-            <span className="play-icon">▶</span>
+            <Play className="play-icon" size={24} />
           </div>
         )}
         {!hasFile && (

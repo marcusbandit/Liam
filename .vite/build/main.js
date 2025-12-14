@@ -13689,6 +13689,14 @@ function createWindow() {
   {
     mainWindow.loadURL("http://localhost:5173");
   }
+  if (process.env.DEV_MODE === "true") {
+    mainWindow.webContents.openDevTools();
+    mainWindow.webContents.on("before-input-event", (_event, input) => {
+      if (input.control && input.shift && input.key.toLowerCase() === "i") {
+        mainWindow?.webContents.toggleDevTools();
+      }
+    });
+  }
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     console.error("Renderer failed to load:", errorCode, errorDescription);
   });
@@ -13711,7 +13719,6 @@ app.whenReady().then(() => {
     if (!filePath.startsWith("/")) {
       filePath = "/" + filePath;
     }
-    console.log("Media request:", filePath);
     if (!existsSync(filePath)) {
       console.error("File not found:", filePath);
       return new Response("File not found", { status: 404 });
@@ -13932,6 +13939,7 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
         }
         newMetadata[mediaId] = {
           ...existing,
+          seriesId: mediaId,
           title: cachedTitle,
           fileEpisodes: media.files.map((f) => ({
             episodeNumber: f.episodeNumber,

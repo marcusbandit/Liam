@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Button from './Button';
+import { ChevronLeft } from 'lucide-react';
 
 interface MenuPosition {
   x: number;
@@ -59,10 +61,10 @@ function ContextMenu() {
         top: position.y,
       }}
     >
-      <button className="context-menu-item" onClick={handleBack}>
-        <span className="context-menu-icon">◀</span>
+      <Button className="context-menu-item" onClick={handleBack}>
+        <ChevronLeft className="context-menu-icon" size={18} />
         <span>Back</span>
-      </button>
+      </Button>
     </div>
   );
 }

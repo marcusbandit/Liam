@@ -23,7 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 
+# Build output
 out/
+# Vite build output
+.vite/
 
 # App data
 src/data/
@@ -31,3 +34,4 @@ src/data/
 !package.json
 !package-lock.json
 !tsconfig.json
+.vite/build/main.js

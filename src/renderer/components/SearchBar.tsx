@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { Search, X } from 'lucide-react';
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
@@ -42,7 +43,7 @@ function SearchBar({ onSearch, placeholder = 'Search...' }: SearchBarProps) {
 
   return (
     <div className="search-bar-wrapper">
-      <div className="search-bar-icon">🔍</div>
+      <Search className="search-bar-icon" size={18} />
       <input
         ref={inputRef}
         type="text"
@@ -57,7 +58,7 @@ function SearchBar({ onSearch, placeholder = 'Search...' }: SearchBarProps) {
           onClick={handleClear}
           aria-label="Clear search"
         >
-          ×
+          <X size={18} />
         </button>
       )}
       <div className="search-bar-hint">

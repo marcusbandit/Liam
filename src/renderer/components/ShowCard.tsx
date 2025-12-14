@@ -1,5 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import type { SeriesMetadata } from '../hooks/useMetadata';
+import { Film, Tv, Play, Star } from 'lucide-react';
+import { getDisplayRating } from '../utils/ratingUtils';
 
 // Helper to convert local file path to media:// URL
 function getImageUrl(localPath?: string | null, remotePath?: string | null): string | null {
@@ -54,11 +56,13 @@ function ShowCard({ seriesId, seriesData, size = 'normal' }: ShowCardProps) {
           />
         ) : (
           <div className="show-card-no-image">
-            <span>{isMovie ? '🎬' : '📺'}</span>
+            {isMovie ? <Film size={48} /> : <Tv size={48} />}
           </div>
         )}
         <div className="show-card-overlay">
-          <div className="show-card-play">▶</div>
+          <div className="show-card-play">
+            <Play size={24} />
+          </div>
         </div>
         {!isMovie && totalEpisodes > 0 && (
           <div className="show-card-badge">
@@ -67,7 +71,7 @@ function ShowCard({ seriesId, seriesData, size = 'normal' }: ShowCardProps) {
         )}
         {seriesData.averageScore && (
           <div className="show-card-score">
-            ★ {(seriesData.averageScore / 10).toFixed(1)}
+            <Star size={14} /> {getDisplayRating(seriesData.averageScore, seriesData.source)}
           </div>
         )}
       </div>

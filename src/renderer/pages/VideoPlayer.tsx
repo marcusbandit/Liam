@@ -1,6 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { useMetadata, type FileEpisode } from '../hooks/useMetadata.js';
+import Button from '../components/Button';
+import { ArrowLeft } from 'lucide-react';
 
 interface SubtitleTrack {
   src: string;
@@ -71,46 +73,56 @@ function VideoPlayer() {
       <div className="loading">
         <p>Loading episode...</p>
         {seriesId && (
-          <button className="button" onClick={() => navigate(`/series/${seriesId}`)}>
+          <Button onClick={() => navigate(`/series/${seriesId}`)}>
             Back to Series
-          </button>
+          </Button>
         )}
       </div>
     );
   }
 
   return (
-    <div style={{ width: '100%', height: '100vh', backgroundColor: '#000', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: '1rem', left: '1rem', zIndex: 1000 }}>
-        <button
-          className="button"
-          onClick={() => navigate(`/series/${seriesId}`)}
-          style={{ marginRight: '1rem' }}
+    <div className="video-player-wrapper">
+      <div className="video-player-header">
+        <Button 
+          onClick={() => navigate(`/series/${seriesId}`)} 
+          className="player-back-btn"
+          aria-label="Back to series"
         >
-          ← Back
-        </button>
-        <span style={{ color: '#fff', marginLeft: '1rem' }}>
-          {episodeData.title || `Episode ${episodeNumber}`}
-        </span>
+          <ArrowLeft className="back-icon" size={18} />
+          <span>Back</span>
+        </Button>
+        <div className="player-header-info">
+          <h2 className="player-episode-title">
+            {episodeData.title || `Episode ${episodeNumber}`}
+          </h2>
+          {episodeData.seasonNumber !== null && episodeData.seasonNumber !== undefined && (
+            <span className="player-episode-meta">
+              Season {episodeData.seasonNumber} • Episode {episodeNumber}
+            </span>
+          )}
+        </div>
       </div>
-      <video
-        ref={videoRef}
-        src={videoSrc}
-        controls
-        autoPlay
-        style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
-      >
-        {subtitleSrcs.map((subtitle, index) => (
-          <track
-            key={index}
-            src={subtitle.src}
-            kind={subtitle.kind}
-            label={subtitle.label}
-            default={subtitle.default}
-          />
-        ))}
-        Your browser does not support the video tag.
-      </video>
+      <div className="video-container">
+        <video
+          ref={videoRef}
+          src={videoSrc}
+          controls
+          autoPlay
+          className="video-element"
+        >
+          {subtitleSrcs.map((subtitle, index) => (
+            <track
+              key={index}
+              src={subtitle.src}
+              kind={subtitle.kind}
+              label={subtitle.label}
+              default={subtitle.default}
+            />
+          ))}
+          Your browser does not support the video tag.
+        </video>
+      </div>
     </div>
   );
 }
