@@ -214,39 +214,24 @@ async function scanDirectory(rootPath) {
               }
             }
           } else if (subVideos.length > 0) {
-            if (subVideos.length === 1) {
-              const video = subVideos[0];
-              const movieTitle = cleanMovieTitle(video.filename);
-              const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-              console.log(`  🎬 Movie: ${video.filename} → search: "${movieTitle}"`);
-              results.push({
-                id: `movie_${movieId}`,
-                name: movieTitle,
-                type: "movie",
-                folderPath: entryPath,
-                files: [video],
-                seasonNumber: null
-              });
-            } else {
-              const seriesName = cleanSeriesName(entry);
-              const seasonFromFolder = extractSeasonNumber(entry);
-              const baseId = entry.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-              const seriesId = seasonFromFolder ? `${baseId}_s${seasonFromFolder.toString().padStart(2, "0")}` : baseId;
-              console.log(`  📺 Series: ${entry} (${subVideos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesName}"`);
-              results.push({
-                id: seriesId,
-                name: seriesName,
-                type: "series",
-                folderPath: entryPath,
-                files: subVideos.sort((a, b) => {
-                  const seasonA = a.seasonNumber ?? 0;
-                  const seasonB = b.seasonNumber ?? 0;
-                  if (seasonA !== seasonB) return seasonA - seasonB;
-                  return a.episodeNumber - b.episodeNumber;
-                }),
-                seasonNumber: seasonFromFolder
-              });
-            }
+            const seriesName = cleanSeriesName(entry);
+            const seasonFromFolder = extractSeasonNumber(entry);
+            const baseId = entry.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+            const seriesId = seasonFromFolder ? `${baseId}_s${seasonFromFolder.toString().padStart(2, "0")}` : baseId;
+            console.log(`  📺 Series: ${entry} (${subVideos.length} episode${subVideos.length > 1 ? "s" : ""}${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesName}"`);
+            results.push({
+              id: seriesId,
+              name: seriesName,
+              type: "series",
+              folderPath: entryPath,
+              files: subVideos.sort((a, b) => {
+                const seasonA = a.seasonNumber ?? 0;
+                const seasonB = b.seasonNumber ?? 0;
+                if (seasonA !== seasonB) return seasonA - seasonB;
+                return a.episodeNumber - b.episodeNumber;
+              }),
+              seasonNumber: seasonFromFolder
+            });
           }
         } else if (stats.isFile() && isVideoFile(entry)) {
           const movieTitle = cleanMovieTitle(entry);
@@ -13355,6 +13340,18 @@ const metadataHandler = {
       console.error("Error getting series metadata:", error);
       return null;
     }
+  },
+  async deleteSeriesMetadata(seriesId) {
+    try {
+      const metadata = await this.loadMetadata();
+      delete metadata[seriesId];
+      const metadataPath = getMetadataPath();
+      await writeFile(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
+      return true;
+    } catch (error) {
+      console.error("Error deleting series metadata:", error);
+      throw error;
+    }
   }
 };
 const DEFAULT_CONFIG = {
@@ -13636,6 +13633,75 @@ const imageCacheHandler = {
       return { count, sizeBytes: totalSize };
     } catch {
       return { count: 0, sizeBytes: 0 };
+    }
+  },
+  /**
+   * Delete cached images for a specific series
+   */
+  async deleteSeriesImages(seriesData) {
+    try {
+      const cacheIndex = await loadCacheIndex();
+      const imageUrls = [
+        seriesData.poster,
+        seriesData.banner
+      ];
+      if (seriesData.episodes) {
+        for (const ep of seriesData.episodes) {
+          if (ep.thumbnail) {
+            imageUrls.push(ep.thumbnail);
+          }
+        }
+      }
+      let deletedCount = 0;
+      for (const url of imageUrls) {
+        if (!url) continue;
+        const entry = cacheIndex[url];
+        if (entry) {
+          try {
+            if (await fileExists$1(entry.localPath)) {
+              await rm(entry.localPath, { force: true });
+              deletedCount++;
+            }
+            delete cacheIndex[url];
+          } catch (error) {
+            console.error(`Error deleting cached image ${entry.localPath}:`, error);
+          }
+        }
+      }
+      const localPaths = [
+        seriesData.posterLocal,
+        seriesData.bannerLocal
+      ];
+      if (seriesData.episodes) {
+        for (const ep of seriesData.episodes) {
+          if (ep.thumbnailLocal) {
+            localPaths.push(ep.thumbnailLocal);
+          }
+        }
+      }
+      for (const localPath of localPaths) {
+        if (!localPath) continue;
+        const actualPath = localPath.startsWith("media://") ? decodeURIComponent(localPath.replace("media://", "")) : localPath;
+        try {
+          if (await fileExists$1(actualPath)) {
+            await rm(actualPath, { force: true });
+            deletedCount++;
+          }
+        } catch (error) {
+          console.error(`Error deleting local image ${actualPath}:`, error);
+        }
+        for (const [url, entry] of Object.entries(cacheIndex)) {
+          if (entry.localPath === actualPath) {
+            delete cacheIndex[url];
+            break;
+          }
+        }
+      }
+      await saveCacheIndex(cacheIndex);
+      console.log(`Deleted ${deletedCount} cached images for series`);
+    } catch (error) {
+      console.error("Error deleting series images:", error);
+      throw error;
     }
   },
   /**
@@ -14025,6 +14091,20 @@ ipcMain.handle("clear-metadata", async () => {
     return await metadataHandler.saveMetadata({});
   } catch (error) {
     console.error("Error clearing metadata:", error);
+    throw error;
+  }
+});
+ipcMain.handle("delete-series", async (_event, seriesId) => {
+  try {
+    const seriesData = await metadataHandler.getSeriesMetadata(seriesId);
+    if (seriesData) {
+      await imageCacheHandler.deleteSeriesImages(seriesData);
+    }
+    await metadataHandler.deleteSeriesMetadata(seriesId);
+    console.log(`Deleted series: ${seriesId}`);
+    return true;
+  } catch (error) {
+    console.error("Error deleting series:", error);
     throw error;
   }
 });

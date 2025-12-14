@@ -85,6 +85,19 @@ const metadataHandler = {
       return null;
     }
   },
+
+  async deleteSeriesMetadata(seriesId: string): Promise<boolean> {
+    try {
+      const metadata = await this.loadMetadata();
+      delete metadata[seriesId];
+      const metadataPath = getMetadataPath();
+      await writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
+      return true;
+    } catch (error) {
+      console.error('Error deleting series metadata:', error);
+      throw error;
+    }
+  },
 };
 
 export default metadataHandler;

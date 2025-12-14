@@ -1,38 +1,28 @@
 import { useState, useMemo } from 'react';
-import { useMetadata, type SeriesMetadata } from '../hooks/useMetadata';
-import { Link } from 'react-router-dom';
+import { useMetadata, type SeriesMetadata, type FileEpisode } from '../hooks/useMetadata';
 import Button from '../components/Button';
-import { BookOpen, Tv, Film, Star, Link as LinkIcon, Search, X, Folder, Calendar, Building, ChevronUp, ChevronDown, LayoutGrid, List } from 'lucide-react';
+import { BookOpen, Tv, Film, Star, Search, X, Folder, Calendar, Building, ChevronDown, RefreshCw, Check, AlertCircle, Trash2 } from 'lucide-react';
 import { normalizeRating, getDisplayRating } from '../utils/ratingUtils';
 
-type SortOption = 'title' | 'episodes' | 'score' | 'status' | 'source';
-type ViewMode = 'grid' | 'list';
+type SortOption = 'title' | 'episodes' | 'score';
 
 function MetadataTab() {
   const { metadata, loading, updateSeriesMetadata, loadMetadata } = useMetadata();
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('title');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [filterSource, setFilterSource] = useState<string>('all');
-  const [filterGenre, setFilterGenre] = useState<string>('all');
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [bulkRefreshing, setBulkRefreshing] = useState(false);
 
   const seriesList = useMemo(() => Object.entries(metadata), [metadata]);
 
-  // Get unique sources and genres for filters
-  const { sources, genres, stats } = useMemo(() => {
-    const sourceSet = new Set<string>();
-    const genreSet = new Set<string>();
+  // Get stats
+  const stats = useMemo(() => {
     let totalEpisodes = 0;
     let avgScore = 0;
     let scoreCount = 0;
 
     seriesList.forEach(([, data]) => {
-      if (data.source) sourceSet.add(data.source);
-      data.genres?.forEach(g => genreSet.add(g));
       totalEpisodes += data.episodes?.length || 0;
       if (data.averageScore) {
         const normalized = normalizeRating(data.averageScore, data.source) || 0;
@@ -42,13 +32,9 @@ function MetadataTab() {
     });
 
     return {
-      sources: Array.from(sourceSet).sort(),
-      genres: Array.from(genreSet).sort(),
-      stats: {
-        totalSeries: seriesList.length,
-        totalEpisodes,
-        avgScore: scoreCount > 0 ? Math.round(avgScore / scoreCount) : 0
-      }
+      totalSeries: seriesList.length,
+      totalEpisodes,
+      avgScore: scoreCount > 0 ? Math.round(avgScore / scoreCount) : 0
     };
   }, [seriesList]);
 
@@ -58,10 +44,9 @@ function MetadataTab() {
       const title = data.title || id;
       const matchesSearch = title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         data.titleRomaji?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        data.titleEnglish?.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesSource = filterSource === 'all' || data.source === filterSource;
-      const matchesGenre = filterGenre === 'all' || data.genres?.includes(filterGenre);
-      return matchesSearch && matchesSource && matchesGenre;
+        data.titleEnglish?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        id.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesSearch;
     });
 
     filtered.sort(([idA, dataA], [idB, dataB]) => {
@@ -78,18 +63,12 @@ function MetadataTab() {
           const scoreB = normalizeRating(dataB.averageScore, dataB.source) || 0;
           comparison = scoreA - scoreB;
           break;
-        case 'status':
-          comparison = (dataA.status || '').localeCompare(dataB.status || '');
-          break;
-        case 'source':
-          comparison = (dataA.source || '').localeCompare(dataB.source || '');
-          break;
       }
-      return sortOrder === 'asc' ? comparison : -comparison;
+      return comparison;
     });
 
     return filtered;
-  }, [seriesList, searchQuery, filterSource, filterGenre, sortBy, sortOrder]);
+  }, [seriesList, searchQuery, sortBy]);
 
   const handleRefresh = async (seriesId: string, seriesName: string) => {
     setRefreshing(prev => ({ ...prev, [seriesId]: true }));
@@ -137,7 +116,7 @@ function MetadataTab() {
     await loadMetadata();
   };
 
-  const toggleExpanded = (seriesId: string) => {
+  const toggleCardExpanded = (seriesId: string) => {
     setExpandedCards(prev => {
       const next = new Set(prev);
       if (next.has(seriesId)) {
@@ -149,29 +128,25 @@ function MetadataTab() {
     });
   };
 
-  const getStatusClass = (status?: string) => {
-    switch (status?.toUpperCase()) {
-      case 'RELEASING':
-      case 'ONGOING':
-        return 'status-releasing';
-      case 'FINISHED':
-      case 'COMPLETED':
-        return 'status-finished';
-      case 'NOT_YET_RELEASED':
-      case 'UPCOMING':
-        return 'status-upcoming';
-      case 'CANCELLED':
-        return 'status-cancelled';
-      case 'HIATUS':
-        return 'status-hiatus';
-      default:
-        return '';
-    }
+  const handleManualSearch = (seriesId: string) => {
+    // Placeholder for future manual search functionality
+    console.log('Manual search clicked for:', seriesId);
+    alert(`Manual search for "${seriesId}" - Coming soon!`);
   };
 
-  const formatStatus = (status?: string) => {
-    if (!status) return 'Unknown';
-    return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  const handleDelete = async (seriesId: string, seriesName: string) => {
+    if (!confirm(`Delete "${seriesName}"?\n\nThis will remove all cached images and metadata for this series.`)) {
+      return;
+    }
+
+    try {
+      await window.electronAPI.deleteSeries(seriesId);
+      await loadMetadata();
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      console.error('Error deleting series:', err);
+      alert('Error deleting series: ' + errorMessage);
+    }
   };
 
   if (loading) {
@@ -195,120 +170,41 @@ function MetadataTab() {
   }
 
   return (
-    <div className="metadata-container">
-      {/* Stats Header */}
-      <div className="metadata-stats">
-        <div className="stat-card">
-          <Tv className="stat-icon" size={24} />
-          <div className="stat-content">
-            <span className="stat-value">{stats.totalSeries}</span>
-            <span className="stat-label">Series</span>
-          </div>
+    <div className="metadata-container compact">
+      {/* Compact Header */}
+      <div className="metadata-header-compact">
+        <div className="metadata-stats-inline">
+          <span className="stat-inline"><Tv size={16} /> {stats.totalSeries} Series</span>
+          <span className="stat-inline"><Film size={16} /> {stats.totalEpisodes} Episodes</span>
+          {stats.avgScore > 0 && <span className="stat-inline"><Star size={16} /> {stats.avgScore} Avg</span>}
         </div>
-        <div className="stat-card">
-          <Film className="stat-icon" size={24} />
-          <div className="stat-content">
-            <span className="stat-value">{stats.totalEpisodes}</span>
-            <span className="stat-label">Episodes</span>
-          </div>
-        </div>
-        <div className="stat-card">
-          <Star className="stat-icon" size={24} />
-          <div className="stat-content">
-            <span className="stat-value">{stats.avgScore || '—'}</span>
-            <span className="stat-label">Avg Score</span>
-          </div>
-        </div>
-        <div className="stat-card sources">
-          <LinkIcon className="stat-icon" size={24} />
-          <div className="stat-content">
-            <span className="stat-value">{sources.length}</span>
-            <span className="stat-label">Sources</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Controls */}
-      <div className="metadata-controls">
-        <div className="controls-left">
-          <div className="search-wrapper">
-            <Search className="search-icon" size={18} />
+        
+        <div className="metadata-controls-compact">
+          <div className="search-wrapper compact">
+            <Search className="search-icon" size={16} />
             <input
               type="text"
               className="search-input"
-              placeholder="Search series..."
+              placeholder="Search..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
             {searchQuery && (
               <Button className="search-clear" onClick={() => setSearchQuery('')}>
-                <X size={18} />
+                <X size={14} />
               </Button>
             )}
           </div>
           
           <select
-            className="filter-select"
-            value={filterSource}
-            onChange={(e) => setFilterSource(e.target.value)}
+            className="sort-select compact"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as SortOption)}
           >
-            <option value="all">All Sources</option>
-            {sources.map(source => (
-              <option key={source} value={source}>{source}</option>
-            ))}
+            <option value="title">Title</option>
+            <option value="episodes">Episodes</option>
+            <option value="score">Score</option>
           </select>
-
-          <select
-            className="filter-select"
-            value={filterGenre}
-            onChange={(e) => setFilterGenre(e.target.value)}
-          >
-            <option value="all">All Genres</option>
-            {genres.map(genre => (
-              <option key={genre} value={genre}>{genre}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="controls-right">
-          <div className="sort-controls">
-            <select
-              className="sort-select"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortOption)}
-            >
-              <option value="title">Sort by Title</option>
-              <option value="episodes">Sort by Episodes</option>
-              <option value="score">Sort by Score</option>
-              <option value="status">Sort by Status</option>
-              <option value="source">Sort by Source</option>
-            </select>
-            <Button
-              className="sort-order-btn"
-              onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
-              title={sortOrder === 'asc' ? 'Ascending' : 'Descending'}
-              size="small"
-            >
-              {sortOrder === 'asc' ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-            </Button>
-          </div>
-
-          <div className="view-toggle">
-            <Button
-              className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`}
-              onClick={() => setViewMode('grid')}
-              title="Grid View"
-            >
-              <LayoutGrid size={18} />
-            </Button>
-            <Button
-              className={`view-btn ${viewMode === 'list' ? 'active' : ''}`}
-              onClick={() => setViewMode('list')}
-              title="List View"
-            >
-              <List size={18} />
-            </Button>
-          </div>
 
           <Button
             className="refresh-all-btn"
@@ -317,149 +213,223 @@ function MetadataTab() {
             variant="primary"
             size="small"
           >
+            <RefreshCw size={14} className={bulkRefreshing ? 'spin' : ''} />
             {bulkRefreshing ? 'Refreshing...' : 'Refresh All'}
           </Button>
         </div>
       </div>
 
       {/* Results count */}
-      <div className="results-info">
-        Showing {filteredSeries.length} of {seriesList.length} series
+      <div className="results-info compact">
+        {filteredSeries.length} of {seriesList.length} items
         {searchQuery && ` matching "${searchQuery}"`}
       </div>
 
-      {/* Series Grid/List */}
+      {/* Series List */}
       {filteredSeries.length === 0 ? (
         <div className="no-results">
           <Search className="no-results-icon" size={48} />
-          <p>No series match your filters</p>
-          <Button variant="secondary" onClick={() => {
-            setSearchQuery('');
-            setFilterSource('all');
-            setFilterGenre('all');
-          }}>
-            Clear Filters
+          <p>No series match your search</p>
+          <Button variant="secondary" onClick={() => setSearchQuery('')}>
+            Clear Search
           </Button>
         </div>
       ) : (
-        <div className={`metadata-grid ${viewMode}`}>
-          {filteredSeries.map(([seriesId, seriesData]) => (
-            <div 
-              key={seriesId} 
-              className={`metadata-card ${viewMode} ${expandedCards.has(seriesId) ? 'expanded' : ''}`}
-            >
-              {/* Poster */}
-              <div className="card-poster">
-                {seriesData.poster ? (
-                  <img src={seriesData.poster} alt={seriesData.title} loading="lazy" />
-                ) : (
-                  <div className="no-poster">
-                    <Film size={32} />
+        <div className="metadata-list-compact">
+          {filteredSeries.map(([seriesId, seriesData]) => {
+            const hasMetadata = seriesData.title && seriesData.poster;
+            const isExpanded = expandedCards.has(seriesId);
+            const fileCount = seriesData.fileEpisodes?.length || 0;
+            
+            // Create a map of episode numbers to files
+            const fileMap = new Map<number, FileEpisode>();
+            seriesData.fileEpisodes?.forEach(file => {
+              fileMap.set(file.episodeNumber, file);
+            });
+            
+            // Create merged list: files + missing episodes
+            const allEpisodes: Array<{
+              episodeNumber: number;
+              isFile: boolean;
+              filename?: string;
+              title?: string;
+            }> = [];
+            
+            // Add all metadata episodes (for missing ones)
+            if (seriesData.episodes) {
+              seriesData.episodes.forEach(ep => {
+                const file = fileMap.get(ep.episodeNumber);
+                if (file) {
+                  // File exists - use actual filename
+                  allEpisodes.push({
+                    episodeNumber: ep.episodeNumber,
+                    isFile: true,
+                    filename: file.filename,
+                    title: ep.title
+                  });
+                } else {
+                  // Missing episode - show from metadata
+                  allEpisodes.push({
+                    episodeNumber: ep.episodeNumber,
+                    isFile: false,
+                    title: ep.title
+                  });
+                }
+              });
+            } else if (seriesData.fileEpisodes) {
+              // No metadata episodes, just show files
+              seriesData.fileEpisodes.forEach(file => {
+                allEpisodes.push({
+                  episodeNumber: file.episodeNumber,
+                  isFile: true,
+                  filename: file.filename
+                });
+              });
+            }
+            
+            return (
+              <div 
+                key={seriesId} 
+                className={`metadata-card-v2 ${hasMetadata ? 'matched' : 'unmatched'} ${isExpanded ? 'expanded' : ''}`}
+              >
+                {/* Main Card Content */}
+                <div className="card-main" onClick={() => toggleCardExpanded(seriesId)}>
+                  {/* Left: Folder Info */}
+                  <div className="card-folder">
+                    <Folder size={18} className="folder-icon" />
+                    <div className="folder-info">
+                      <span className="folder-name">{seriesId}</span>
+                      <span className="folder-files">{fileCount} video files</span>
+                    </div>
                   </div>
-                )}
-                {seriesData.averageScore && (
-                  <div className="card-score">
-                    <Star size={14} /> {getDisplayRating(seriesData.averageScore, seriesData.source)}
+
+                  {/* Center: Arrow */}
+                  <div className="card-arrow">
+                    <span className="arrow-icon">→</span>
                   </div>
-                )}
-              </div>
 
-              {/* Content */}
-              <div className="card-content">
-                <div className="card-header">
-                  <Link to={`/series/${seriesId}`} className="card-title">
-                    {seriesData.title || seriesId}
-                  </Link>
-                  {seriesData.titleRomaji && seriesData.titleRomaji !== seriesData.title && (
-                    <span className="card-alt-title">{seriesData.titleRomaji}</span>
-                  )}
-                </div>
-
-                <div className="card-badges">
-                  <span className={`badge source-badge source-${seriesData.source?.toLowerCase()}`}>
-                    {seriesData.source || 'Unknown'}
-                  </span>
-                  {seriesData.status && (
-                    <span className={`badge status-badge ${getStatusClass(seriesData.status)}`}>
-                      {formatStatus(seriesData.status)}
-                    </span>
-                  )}
-                  {seriesData.format && (
-                    <span className="badge format-badge">{seriesData.format}</span>
-                  )}
-                </div>
-
-                <div className="card-meta">
-                  <span className="meta-item">
-                    <Folder className="meta-icon" size={16} />
-                    {seriesData.episodes?.length || 0} / {seriesData.totalEpisodes || '?'} episodes
-                  </span>
-                  {seriesData.startDate && (
-                    <span className="meta-item">
-                      <Calendar className="meta-icon" size={16} />
-                      {seriesData.startDate}
-                    </span>
-                  )}
-                  {seriesData.studios && seriesData.studios.length > 0 && (
-                    <span className="meta-item">
-                      <Building className="meta-icon" size={16} />
-                      {seriesData.studios.slice(0, 2).join(', ')}
-                    </span>
-                  )}
-                </div>
-
-                {seriesData.genres && seriesData.genres.length > 0 && (
-                  <div className="card-genres">
-                    {seriesData.genres.slice(0, 4).map(genre => (
-                      <span key={genre} className="genre-pill">{genre}</span>
-                    ))}
-                    {seriesData.genres.length > 4 && (
-                      <span className="genre-pill more">+{seriesData.genres.length - 4}</span>
-                    )}
-                  </div>
-                )}
-
-                {seriesData.description && (
-                  <div className={`card-description ${expandedCards.has(seriesId) ? 'expanded' : ''}`}>
-                    <p dangerouslySetInnerHTML={{ 
-                      __html: expandedCards.has(seriesId) 
-                        ? seriesData.description 
-                        : seriesData.description.substring(0, 150) + (seriesData.description.length > 150 ? '...' : '')
-                    }} />
-                    {seriesData.description.length > 150 && (
-                      <Button 
-                        className="expand-btn"
-                        onClick={() => toggleExpanded(seriesId)}
-                      >
-                        {expandedCards.has(seriesId) ? 'Show less' : 'Show more'}
-                      </Button>
-                    )}
-                  </div>
-                )}
-
-                <div className="card-actions">
-                  <Button as="link" to={`/series/${seriesId}`} variant="secondary" className="view-btn">
-                    View Series
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="small"
-                    onClick={() => handleRefresh(seriesId, seriesData.title || seriesId)}
-                    disabled={refreshing[seriesId] || bulkRefreshing}
-                  >
-                    {refreshing[seriesId] ? (
+                  {/* Right: Matched Metadata */}
+                  <div className="card-metadata">
+                    {hasMetadata ? (
                       <>
-                        <span className="btn-spinner"></span>
-                        Refreshing...
+                        <div className="meta-poster-lg">
+                          <img src={seriesData.poster || undefined} alt={seriesData.title} />
+                        </div>
+                        <div className="meta-info">
+                          <div className="meta-title-row">
+                            <span className={`meta-title ${isExpanded ? 'expanded' : ''}`}>{seriesData.title}</span>
+                            <Check size={16} className="match-icon" />
+                          </div>
+                          <div className="meta-details">
+                            <span className="detail-item detail-year">
+                              <Calendar size={13} />
+                              {seriesData.startDate ? seriesData.startDate.split('-')[0] : '—'}
+                            </span>
+                            <span className="detail-item detail-eps">
+                              <Film size={13} />
+                              {seriesData.totalEpisodes || '?'} eps
+                            </span>
+                            <span className="detail-item detail-score">
+                              <Star size={13} />
+                              {seriesData.averageScore ? getDisplayRating(seriesData.averageScore, seriesData.source) : '—'}
+                            </span>
+                            {seriesData.studios && seriesData.studios.length > 0 && (
+                              <span className="detail-item detail-studio">
+                                <Building size={13} />
+                                {seriesData.studios[0]}
+                              </span>
+                            )}
+                          </div>
+                          <div className="meta-source">
+                            <span className={`source-tag source-${seriesData.source?.toLowerCase()}`}>
+                              {seriesData.source}
+                            </span>
+                          </div>
+                        </div>
                       </>
                     ) : (
-                      'Refresh'
+                      <div className="meta-empty">
+                        <AlertCircle size={20} className="warning-icon" />
+                        <span>No metadata found</span>
+                      </div>
                     )}
-                  </Button>
+                  </div>
+
+                  {/* Expand Indicator */}
+                  <div className="card-expand">
+                    <ChevronDown size={18} className={`expand-chevron ${isExpanded ? 'rotated' : ''}`} />
+                  </div>
+                </div>
+
+                {/* Expanded Content - Always rendered, CSS controls visibility */}
+                <div className={`card-expanded-wrapper ${isExpanded ? 'open' : ''}`}>
+                  <div className="card-expanded-inner">
+                    {/* Files List */}
+                    <div className="expanded-section">
+                      <div className="section-header">
+                        <Film size={14} />
+                        <span>Video Files ({fileCount} / {seriesData.totalEpisodes || allEpisodes.length})</span>
+                      </div>
+                      <div className="files-list">
+                        {allEpisodes.length > 0 ? (
+                          allEpisodes.map((ep, idx) => (
+                            <div key={idx} className={`file-row ${ep.isFile ? '' : 'missing'}`}>
+                              <span className="file-number">#{ep.episodeNumber}</span>
+                              <span className="file-name">
+                                {ep.isFile ? ep.filename : (ep.title || `Episode ${ep.episodeNumber}`)}
+                              </span>
+                              {!ep.isFile && <span className="missing-badge">Missing</span>}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="no-files">No video files found</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="expanded-actions">
+                      <Button
+                        variant="secondary"
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleManualSearch(seriesId);
+                        }}
+                      >
+                        <Search size={14} />
+                        Manual Search
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRefresh(seriesId, seriesData.title || seriesId);
+                        }}
+                        disabled={refreshing[seriesId] || bulkRefreshing}
+                      >
+                        <RefreshCw size={14} className={refreshing[seriesId] ? 'spin' : ''} />
+                        {refreshing[seriesId] ? 'Refreshing...' : 'Refresh'}
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(seriesId, seriesData.title || seriesId);
+                        }}
+                        disabled={refreshing[seriesId] || bulkRefreshing}
+                      >
+                        <Trash2 size={14} />
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

@@ -30,6 +30,7 @@ export interface ElectronAPI {
   saveMetadata: (metadata: Record<string, unknown>) => Promise<boolean>;
   loadMetadata: () => Promise<Record<string, unknown>>;
   clearMetadata: () => Promise<boolean>;
+  deleteSeries: (seriesId: string) => Promise<boolean>;
   getSeriesEpisodes: (seriesId: string) => Promise<unknown[]>;
   
   // Image cache
@@ -64,6 +65,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveMetadata: (metadata: Record<string, unknown>) => ipcRenderer.invoke('save-metadata', metadata),
   loadMetadata: () => ipcRenderer.invoke('load-metadata'),
   clearMetadata: () => ipcRenderer.invoke('clear-metadata'),
+  deleteSeries: (seriesId: string) => ipcRenderer.invoke('delete-series', seriesId),
   getSeriesEpisodes: (seriesId: string) => ipcRenderer.invoke('get-series-episodes', seriesId),
   
   // Image cache
