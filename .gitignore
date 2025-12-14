@@ -26,7 +26,7 @@ dist-ssr
 # Build output
 out/
 # Vite build output
-.vite/
+.vite
 
 # App data
 src/data/
