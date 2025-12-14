@@ -343,7 +343,7 @@
 }
 
 .show-card-large {
-  min-height: 420px;
+  min-height: auto;
 }
 
 .show-card-image-wrapper {
@@ -351,6 +351,7 @@
   width: 100%;
   aspect-ratio: 2/3;
   overflow: hidden;
+  border-radius: var(--radius-lg);
 }
 
 .show-card-poster {
@@ -358,6 +359,8 @@
   height: 100%;
   object-fit: cover;
   transition: transform var(--transition-slow);
+  -webkit-mask-image: linear-gradient(#000 0%, #000 70%, transparent 100%);
+  mask-image: linear-gradient(#000 0%, #000 70%, transparent 100%);
 }
 
 .show-card:hover .show-card-poster {
@@ -379,12 +382,13 @@
 .show-card-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, transparent 50%);
+  background: rgba(0, 0, 0, 0.4);
   opacity: 0;
   transition: opacity var(--transition-fast);
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 1;
 }
 
 .show-card:hover .show-card-overlay {
@@ -392,18 +396,30 @@
 }
 
 .show-card-play {
-  width: 60px;
-  height: 60px;
+  width: 56px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--accent-primary);
-  transform: scale(0.8);
-  transition: transform var(--transition-fast);
+  background: transparent;
+  border-radius: 50%;
+  transform: scale(0.9);
+  transition: all var(--transition-normal);
+  cursor: pointer;
 }
 
 .show-card:hover .show-card-play {
   transform: scale(1);
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+}
+
+.show-card-play:hover {
+  transform: scale(1.25) !important;
+  background: rgba(0, 0, 0, 0.75) !important;
+  box-shadow: 0 0 28px rgba(139, 92, 246, 0.5) !important;
+  color: #a78bfa;
 }
 
 .show-card-badge {
@@ -437,25 +453,35 @@
 }
 
 .show-card-info {
-  padding: 1rem;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 2.5rem 0.85rem 0.85rem;
+  background: linear-gradient(to top, #0a0a0f 0%, #0a0a0f 30%, rgba(10, 10, 15, 0.85) 60%, transparent 100%);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  z-index: 2;
 }
 
 .show-card-title {
   font-family: "Outfit", sans-serif;
   font-weight: 600;
-  font-size: 1rem;
-  color: var(--text-primary);
-  line-height: 1.4;
+  font-size: 0.95rem;
+  color: #fff;
+  line-height: 1.3;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 .show-card-genres {
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.7);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 /* ======================= */

@@ -74,14 +74,14 @@ function ShowCard({ seriesId, seriesData, size = 'normal' }: ShowCardProps) {
             <Star size={14} /> {getDisplayRating(seriesData.averageScore, seriesData.source)}
           </div>
         )}
-      </div>
-      <div className="show-card-info">
-        <div className="show-card-title">{seriesData.title}</div>
-        {seriesData.genres && seriesData.genres.length > 0 && (
-          <div className="show-card-genres">
-            {seriesData.genres.slice(0, 2).join(' • ')}
-          </div>
-        )}
+        <div className="show-card-info">
+          <div className="show-card-title">{seriesData.title}</div>
+          {seriesData.genres && seriesData.genres.length > 0 && (
+            <div className="show-card-genres">
+              {seriesData.genres.slice(0, 2).join(' • ')}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
