@@ -1937,11 +1937,6 @@
   color: #6b9dff;
 }
 
-.source-badge.source-tvdb {
-  background: rgba(108, 180, 0, 0.2);
-  color: #8fd400;
-}
-
 .status-badge {
   background: var(--bg-tertiary);
   color: var(--text-secondary);

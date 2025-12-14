@@ -82,21 +82,59 @@ function extractSeasonNumber(folderName) {
     /Season\s*(\d+)/i
     // "Season 1"
   ];
-  var matches = folderName.match(/\d+/g);
-  if (matches == null) {
-    return null;
-  } else {
-    for (const pattern of patterns) {
-      const match = folderName.match(pattern);
-      if (match) {
-        return parseInt(match[1], 10);
-      }
+  for (const pattern of patterns) {
+    const match = folderName.match(pattern);
+    if (match) {
+      return parseInt(match[1], 10);
     }
   }
   return null;
 }
-function cleanSeriesName(folderName) {
-  return folderName.replace(/\s*\(.*?\)\s*/g, "").replace(/\s*\[.*?\]\s*/g, "").replace(/Season\s*\d+/i, "").replace(/S\d+$/i, "").replace(/\s+/g, " ").trim();
+function extractSeriesNameFromFilenames(videoFiles) {
+  if (videoFiles.length === 0) {
+    return "";
+  }
+  const cleanedNames = videoFiles.map((video) => {
+    const baseName = getBaseName(video.filename);
+    let cleaned = baseName.replace(/\s*\bS\d+E\d+\b.*$/i, "").replace(/\s*Episode\s*\d+.*$/i, "").replace(/\s*Ep\.?\s*\d+.*$/i, "").replace(/\s*\[\d+\].*$/, "").replace(/\s*-\s*\d{1,4}(?:\s|$).*$/, "").replace(/\s+\d{1,3}(?!\d)(?:\s|$)/g, "").replace(/\s*\[(?:1080|720|480|360)p?\]\s*/gi, " ").replace(/\s*\[(?:HD|SD|FHD|UHD)\]?\s*/gi, " ").replace(/\s*\(\d{4}\)\s*$/, "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\./g, " ").replace(/_/g, " ").replace(/\s+/g, " ").trim();
+    return cleaned;
+  });
+  if (cleanedNames.length === 1) {
+    return cleanedNames[0];
+  }
+  cleanedNames.sort((a, b) => a.length - b.length);
+  const shortest = cleanedNames[0];
+  let commonPrefix = "";
+  for (let i = 0; i < shortest.length; i++) {
+    const char = shortest[i];
+    if (cleanedNames.every((name) => name[i] === char)) {
+      commonPrefix += char;
+    } else {
+      break;
+    }
+  }
+  let result = commonPrefix.replace(/[-_\s]+$/, "").trim();
+  if (result.length < 3) {
+    const firstFileWords = cleanedNames[0].split(/\s+/).filter((w) => w.length > 0 && !/^\d+$/.test(w));
+    const commonWords = [];
+    for (let i = 0; i < firstFileWords.length; i++) {
+      const word = firstFileWords[i];
+      if (cleanedNames.every((name) => {
+        const words = name.split(/\s+/).filter((w) => w.length > 0 && !/^\d+$/.test(w));
+        return i < words.length && words[i] === word;
+      })) {
+        commonWords.push(word);
+      } else {
+        break;
+      }
+    }
+    result = commonWords.join(" ").trim();
+  }
+  if (!result || result.length < 2) {
+    result = cleanedNames[0];
+  }
+  result = result.replace(/\s*-\s*$/, "").replace(/\s+\d+\s*$/, "").trim();
+  return result;
 }
 function cleanMovieTitle(filename) {
   const baseName = getBaseName(filename);
@@ -182,11 +220,10 @@ async function scanDirectory(rootPath) {
               const seasonFromFolder = extractSeasonNumber(subDir);
               const { videos } = await scanFolderForVideos(seriesPath, seasonFromFolder);
               if (videos.length > 0) {
-                const seriesName = cleanSeriesName(entry);
-                const seriesSeasonName = seriesName + (seasonFromFolder ? ` Season ${seasonFromFolder}` : ` ${subDir}`);
+                const seriesName = extractSeriesNameFromFilenames(videos);
                 const baseId = subDir.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
                 const seriesId = seasonFromFolder ? `${baseId}_s${seasonFromFolder.toString().padStart(2, "0")}` : baseId;
-                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesSeasonName}"`);
+                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesName}"`);
                 results.push({
                   id: seriesId,
                   name: seriesName,
@@ -195,7 +232,7 @@ async function scanDirectory(rootPath) {
                   files: videos.sort((a, b) => {
                     const seasonA = a.seasonNumber ?? 0;
                     const seasonB = b.seasonNumber ?? 0;
-                    if (seasonA !== seasonB && typeof seasonA === "number" && typeof seasonB === "number") return seasonA - seasonB;
+                    if (seasonA !== seasonB) return seasonA - seasonB;
                     return a.episodeNumber - b.episodeNumber;
                   }),
                   seasonNumber: seasonFromFolder
@@ -233,7 +270,7 @@ async function scanDirectory(rootPath) {
                 seasonNumber: null
               });
             } else {
-              const seriesName = cleanSeriesName(entry);
+              const seriesName = extractSeriesNameFromFilenames(subVideos);
               const seasonFromFolder = extractSeasonNumber(entry);
               const baseId = entry.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
               const seriesId = seasonFromFolder ? `${baseId}_s${seasonFromFolder.toString().padStart(2, "0")}` : baseId;
@@ -246,7 +283,7 @@ async function scanDirectory(rootPath) {
                 files: subVideos.sort((a, b) => {
                   const seasonA = a.seasonNumber ?? 0;
                   const seasonB = b.seasonNumber ?? 0;
-                  if (seasonA !== seasonB && typeof seasonA === "number" && typeof seasonB === "number") return seasonA - seasonB;
+                  if (seasonA !== seasonB) return seasonA - seasonB;
                   return a.episodeNumber - b.episodeNumber;
                 }),
                 seasonNumber: seasonFromFolder
@@ -3655,15 +3692,17 @@ const runRequest = async (input) => {
   };
   const fetcher = createFetcher(config.method);
   const fetchResponse = await fetcher(config);
+  const body = await fetchResponse.text();
   let result;
   try {
-    result = await parseResultFromResponse(fetchResponse, input.fetchOptions.jsonSerializer ?? defaultJsonSerializer);
+    result = parseResultFromText(body, fetchResponse.headers.get(CONTENT_TYPE_HEADER), input.fetchOptions.jsonSerializer ?? defaultJsonSerializer);
   } catch (error) {
     result = error;
   }
   const clientResponseBase = {
     status: fetchResponse.status,
-    headers: fetchResponse.headers
+    headers: fetchResponse.headers,
+    body
   };
   if (!fetchResponse.ok) {
     if (result instanceof Error) {
@@ -3715,9 +3754,7 @@ const executionResultClientResponseFields = ($params) => (executionResult) => {
     errors: $params.fetchOptions.errorPolicy === `all` ? executionResult.errors : void 0
   };
 };
-const parseResultFromResponse = async (response, jsonSerializer) => {
-  const contentType = response.headers.get(CONTENT_TYPE_HEADER);
-  const text = await response.text();
+const parseResultFromText = (text, contentType, jsonSerializer) => {
   if (contentType && isGraphQLContentType(contentType)) {
     return parseGraphQLExecutionResult(jsonSerializer.parse(text));
   } else {
@@ -13117,7 +13154,7 @@ const malHandler = {
       title = `${title} (Season ${seasonNumber})`;
     }
     return {
-      seriesId: `mal_${anime.mal_id}${seasonNumber ? `_s${seasonNumber.toString().padStart(2, "0")}` : ""}`,
+      seriesId: `mal_${anime.mal_id}${seasonNumber ? `_s${String(seasonNumber).padStart(2, "0")}` : ""}`,
       title,
       titleEnglish: anime.title_english,
       titleJapanese: anime.title_japanese,
@@ -13134,157 +13171,6 @@ const malHandler = {
       startDate: anime.aired?.from ? new Date(anime.aired.from).toISOString().split("T")[0] : null,
       endDate: anime.aired?.to ? new Date(anime.aired.to).toISOString().split("T")[0] : null,
       malId: anime.mal_id
-    };
-  }
-};
-const TVDB_API_URL = "https://api4.thetvdb.com/v4";
-let tvdbApiKey = null;
-let tvdbToken = null;
-const tvdbHandler = {
-  setApiKey(apiKey) {
-    tvdbApiKey = apiKey;
-  },
-  async authenticate() {
-    if (!tvdbApiKey) {
-      throw new Error("TVDB API key not set");
-    }
-    try {
-      const response = await axios.post(
-        `${TVDB_API_URL}/login`,
-        { apikey: tvdbApiKey },
-        { headers: { "Content-Type": "application/json" } }
-      );
-      if (response.data?.data?.token) {
-        tvdbToken = response.data.data.token;
-        return tvdbToken;
-      }
-      throw new Error("Failed to authenticate with TVDB");
-    } catch (error) {
-      console.error("TVDB authentication error:", error);
-      throw error;
-    }
-  },
-  async getAuthHeaders() {
-    if (!tvdbToken) {
-      await this.authenticate();
-    }
-    return {
-      "Authorization": `Bearer ${tvdbToken}`,
-      "Content-Type": "application/json"
-    };
-  },
-  async searchAnime(searchTerm) {
-    try {
-      const headers = await this.getAuthHeaders();
-      const response = await axios.get(
-        `${TVDB_API_URL}/search`,
-        {
-          params: { query: searchTerm, type: "series" },
-          headers
-        }
-      );
-      if (response.data?.data?.[0]) {
-        const animeResult = response.data.data.find(
-          (item) => item.type === "series" && (item.overview || item.name.toLowerCase().includes("anime"))
-        ) || response.data.data[0];
-        return animeResult;
-      }
-      return null;
-    } catch (error) {
-      console.error("Error searching TVDB:", error);
-      throw error;
-    }
-  },
-  async getSeriesInfo(seriesId) {
-    try {
-      const headers = await this.getAuthHeaders();
-      const response = await axios.get(
-        `${TVDB_API_URL}/series/${seriesId}/extended`,
-        { headers }
-      );
-      return response.data?.data || null;
-    } catch (error) {
-      console.error("Error fetching TVDB series info:", error);
-      throw error;
-    }
-  },
-  async getEpisodes(seriesId, seasonNumber) {
-    try {
-      const headers = await this.getAuthHeaders();
-      const response = await axios.get(
-        `${TVDB_API_URL}/series/${seriesId}/episodes/default`,
-        { headers }
-      );
-      if (response.data?.data?.episodes) {
-        return response.data.data.episodes.map((ep) => ({
-          episodeNumber: ep.number || null,
-          seasonNumber: seasonNumber ?? null,
-          title: ep.name || `Episode ${ep.number || ""}`,
-          description: ep.overview || null,
-          airDate: ep.aired || null,
-          thumbnail: ep.image || null
-        }));
-      }
-      return [];
-    } catch (error) {
-      console.error("Error fetching TVDB episodes:", error);
-      return [];
-    }
-  },
-  async searchAndFetchMetadata(seriesName, seasonNumber) {
-    try {
-      if (!tvdbApiKey) {
-        return null;
-      }
-      const searchQuery = seasonNumber ? `${seriesName} Season ${seasonNumber}` : seriesName;
-      const searchResult = await this.searchAnime(searchQuery);
-      if (!searchResult) {
-        if (seasonNumber) {
-          const searchResultWithoutSeason = await this.searchAnime(seriesName);
-          if (searchResultWithoutSeason) {
-            const seriesId2 = searchResultWithoutSeason.tvdb_id || searchResultWithoutSeason.id;
-            if (seriesId2) {
-              const seriesInfo2 = await this.getSeriesInfo(seriesId2);
-              const episodes2 = await this.getEpisodes(seriesId2, seasonNumber);
-              return this.formatMetadata(searchResultWithoutSeason, seriesInfo2, episodes2, seriesId2, seasonNumber);
-            }
-          }
-        }
-        return null;
-      }
-      const seriesId = searchResult.tvdb_id || searchResult.id;
-      if (!seriesId) {
-        return null;
-      }
-      const seriesInfo = await this.getSeriesInfo(seriesId);
-      const episodes = await this.getEpisodes(seriesId, seasonNumber);
-      return this.formatMetadata(searchResult, seriesInfo, episodes, seriesId, seasonNumber);
-    } catch (error) {
-      console.error("Error fetching TVDB metadata:", error);
-      return null;
-    }
-  },
-  formatMetadata(searchResult, seriesInfo, episodes, seriesId, seasonNumber) {
-    let title = seriesInfo?.name || searchResult.name;
-    if (seasonNumber) {
-      title = `${title} (Season ${seasonNumber})`;
-    }
-    return {
-      seriesId: `tvdb_${seriesId}${seasonNumber ? `_s${seasonNumber.toString().padStart(2, "0")}` : ""}`,
-      title,
-      description: seriesInfo?.overview || searchResult.overview || "",
-      genres: seriesInfo?.genres?.map((g) => g.name) || [],
-      poster: seriesInfo?.image || searchResult.image || null,
-      banner: seriesInfo?.banner || null,
-      episodes,
-      totalEpisodes: seriesInfo?.episodes?.length || episodes.length,
-      status: seriesInfo?.status?.name || null,
-      format: null,
-      averageScore: seriesInfo?.score || null,
-      studios: [],
-      startDate: seriesInfo?.firstAired || null,
-      endDate: seriesInfo?.lastAired || null,
-      tvdbId: seriesId
     };
   }
 };
@@ -13953,6 +13839,8 @@ ipcMain.handle("fetch-metadata", async (_event, searchName, seasonNumber) => {
     if (malData) {
       console.log(`  ✓ Found on MAL: ${malData.title}`);
       return { ...malData, source: "mal" };
+    } else {
+      console.log(`  ✗ MAL returned no results for "${searchName}"${seasonInfo}`);
     }
   } catch (error) {
     console.log(`  ✗ MAL failed:`, error);
@@ -13960,20 +13848,13 @@ ipcMain.handle("fetch-metadata", async (_event, searchName, seasonNumber) => {
   try {
     const anilistData = await anilistHandler.searchAndFetchMetadata(searchName, seasonNumber);
     if (anilistData) {
-      console.log(`  ✓ Found on AniList: ${anilistData.title}`);
+      console.log(`  ✓ Found on AniList (fallback): ${anilistData.title}`);
       return { ...anilistData, source: "anilist" };
+    } else {
+      console.log(`  ✗ AniList returned no results for "${searchName}"${seasonInfo}`);
     }
   } catch (error) {
     console.log(`  ✗ AniList failed:`, error);
-  }
-  try {
-    const tvdbData = await tvdbHandler.searchAndFetchMetadata(searchName, seasonNumber);
-    if (tvdbData) {
-      console.log(`  ✓ Found on TVDB: ${tvdbData.title}`);
-      return { ...tvdbData, source: "tvdb" };
-    }
-  } catch (error) {
-    console.log(`  ✗ TVDB failed:`, error);
   }
   console.log(`  ✗ No metadata found for: "${searchName}"${seasonInfo}`);
   return null;
@@ -13991,14 +13872,6 @@ ipcMain.handle("fetch-anilist-metadata", async (_event, seriesName, seasonNumber
     return await anilistHandler.searchAndFetchMetadata(seriesName, seasonNumber);
   } catch (error) {
     console.error("Error fetching AniList metadata:", error);
-    throw error;
-  }
-});
-ipcMain.handle("fetch-tvdb-metadata", async (_event, seriesName, seasonNumber) => {
-  try {
-    return await tvdbHandler.searchAndFetchMetadata(seriesName, seasonNumber);
-  } catch (error) {
-    console.error("Error fetching TVDB metadata:", error);
     throw error;
   }
 });
@@ -14080,10 +13953,26 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
       try {
         fetchedMetadata = await malHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
         if (fetchedMetadata) {
+          console.log(`  ✓ Found on MAL: ${fetchedMetadata.title}`);
           fetchedMetadata = { ...fetchedMetadata, source: "mal" };
+        } else {
+          console.log(`  ✗ MAL returned no results for ${media.name}${seasonInfo}`);
         }
       } catch (err) {
-        console.log(`  MAL failed for ${media.name}${seasonInfo}`);
+        console.log(`  ✗ MAL failed for ${media.name}${seasonInfo}:`, err);
+      }
+      if (!fetchedMetadata) {
+        try {
+          fetchedMetadata = await anilistHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
+          if (fetchedMetadata) {
+            console.log(`  ✓ Found on AniList (fallback): ${fetchedMetadata.title}`);
+            fetchedMetadata = { ...fetchedMetadata, source: "anilist" };
+          } else {
+            console.log(`  ✗ AniList returned no results for ${media.name}${seasonInfo}`);
+          }
+        } catch (err) {
+          console.log(`  ✗ AniList failed for ${media.name}${seasonInfo}:`, err);
+        }
       }
       if (fetchedMetadata) {
         console.log(`  📥 Caching images...`);

@@ -60,7 +60,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchMetadata: (seriesName: string) => ipcRenderer.invoke('fetch-metadata', seriesName),
   fetchAnilistMetadata: (seriesName: string) => ipcRenderer.invoke('fetch-anilist-metadata', seriesName),
   fetchMALMetadata: (seriesName: string) => ipcRenderer.invoke('fetch-mal-metadata', seriesName),
-  fetchTVDBMetadata: (seriesName: string) => ipcRenderer.invoke('fetch-tvdb-metadata', seriesName),
   saveMetadata: (metadata: Record<string, unknown>) => ipcRenderer.invoke('save-metadata', metadata),
   loadMetadata: () => ipcRenderer.invoke('load-metadata'),
   clearMetadata: () => ipcRenderer.invoke('clear-metadata'),

@@ -9,7 +9,7 @@ export interface VideoFile {
   filePath: string;
   title: string;
   episodeNumber: number;
-  seasonNumber: string | number | null;
+  seasonNumber: number | null;
   subtitlePath: string | null;
   subtitlePaths: string[];
   parentFolder: string;
@@ -21,7 +21,7 @@ export interface ScannedMedia {
   type: 'series' | 'movie';
   folderPath: string;
   files: VideoFile[];
-  seasonNumber: string | number | null;  // Season number extracted from folder name
+  seasonNumber: number | null;  // Season number extracted from folder name
 }
 
 function isVideoFile(filename: string): boolean {
@@ -39,7 +39,7 @@ function getBaseName(filename: string): string {
 function extractSeasonAndEpisode(filename: string): { season: number | null; episode: number } {
   // IMPORTANT: Work on base name WITHOUT extension to avoid ".mp4" → "4" bug
   const baseName = getBaseName(filename);
-  
+
   // First, try to extract season and episode from S01E01 format
   const seasonEpisodeMatch = baseName.match(/\bS(\d+)E(\d+)\b/i);
   if (seasonEpisodeMatch) {
@@ -48,10 +48,10 @@ function extractSeasonAndEpisode(filename: string): { season: number | null; epi
       episode: parseInt(seasonEpisodeMatch[2], 10),
     };
   }
-  
+
   // Try to extract season from folder name patterns (Season 1, S01, etc.)
   // This will be handled separately when processing folders
-  
+
   // Try various patterns to extract episode number
   const patterns = [
     /Episode\s*(\d+)/i,           // "Episode 10" or "Episode10"
@@ -80,7 +80,7 @@ function extractSeasonAndEpisode(filename: string): { season: number | null; epi
       const num = parseInt(n, 10);
       return num < 1900 || num > 2099;
     });
-    
+
     if (nonYearNumbers.length > 0) {
       // Return the last non-year number
       return {
@@ -93,7 +93,7 @@ function extractSeasonAndEpisode(filename: string): { season: number | null; epi
   return { season: null, episode: 1 };
 }
 
-function extractSeasonNumber(folderName: string): string | number | null {
+function extractSeasonNumber(folderName: string): number | null {
   // Try various patterns to extract season number from folder name
   const patterns = [
     /Season\s*(\d+)/i,           // "Season 1" or "Season1"
@@ -101,33 +101,107 @@ function extractSeasonNumber(folderName: string): string | number | null {
     /Season\s*(\d+)/i,           // "Season 1"
   ];
 
-  // Try to find any numbers at first to quickly rule out folders without numbers
-  var matches = folderName.match(/\d+/g);
-  if (matches == null) {
-    return null;
-  } else {
-    // Otherwise, try each pattern
-    for (const pattern of patterns) {
-      const match = folderName.match(pattern);
-      if (match) {
-        return parseInt(match[1], 10);
-      }
+  for (const pattern of patterns) {
+    const match = folderName.match(pattern);
+    if (match) {
+      return parseInt(match[1], 10);
     }
   }
 
+  // No season pattern found - return null
+  // This correctly handles cases like "86" (show name) vs "Season 1" (season folder)
   return null;
 }
 
-function cleanSeriesName(folderName: string): string {
-  // Remove common suffixes and clean up the name for search
-  // BUT keep season info for now - we'll extract it separately
-  return folderName
-    .replace(/\s*\(.*?\)\s*/g, '')     // Remove (2020), (TV), etc
-    .replace(/\s*\[.*?\]\s*/g, '')     // Remove [1080p], etc
-    .replace(/Season\s*\d+/i, '')      // Remove Season 1, etc (for search name only)
-    .replace(/S\d+$/i, '')             // Remove S01 at end (for search name only)
-    .replace(/\s+/g, ' ')              // Normalize whitespace
+function extractSeriesNameFromFilenames(videoFiles: VideoFile[]): string {
+  if (videoFiles.length === 0) {
+    return '';
+  }
+
+  // Extract base names (without extension) and clean them
+  const cleanedNames = videoFiles.map(video => {
+    const baseName = getBaseName(video.filename);
+
+    // Remove common patterns that indicate episode/season numbers
+    let cleaned = baseName
+      .replace(/\s*\bS\d+E\d+\b.*$/i, '')                     // Remove S01E01, S1E1 patterns (keep everything before)
+      .replace(/\s*Episode\s*\d+.*$/i, '')                    // Remove Episode XX, Ep XX patterns
+      .replace(/\s*Ep\.?\s*\d+.*$/i, '')                      // Remove [XX] episode number patterns
+      .replace(/\s*\[\d+\].*$/, '')                           // Remove - XX patterns (episode numbers after dash, but be careful with "86 - 01")
+      .replace(/\s*-\s*\d{1,4}(?:\s|$).*$/, '')               // Remove standalone episode numbers at the end (1-4 digits, but not years)
+      .replace(/\s+\d{1,3}(?!\d)(?:\s|$)/g, '')               // Remove standalone numbers (1-3 digits) that aren't part of larger numbers
+      .replace(/\s*\[(?:1080|720|480|360)p?\]\s*/gi, ' ')     // Remove quality/resolution tags [1080p], [720p], etc (but keep if it's part of the name)
+      .replace(/\s*\[(?:HD|SD|FHD|UHD)\]?\s*/gi, ' ')         // Remove quality/resolution tags [HD], [SD], etc (but keep if it's part of the name)
+      .replace(/\s*\(\d{4}\)\s*$/, '')                        // Remove year tags (2020), (2021), etc at the end
+      .replace(/\s*\([^)]*\)\s*/g, ' ')                       // Remove other parentheses content
+      .replace(/\./g, ' ')                                    // Replace dots with spaces (but preserve structure)
+      .replace(/_/g, ' ')                                     // Replace underscores with spaces (but preserve structure)
+      .replace(/\s+/g, ' ')                                   // Normalize whitespace
+      .trim();
+
+    return cleaned;
+  });
+
+  // Find the longest common prefix
+  if (cleanedNames.length === 1) {
+    return cleanedNames[0];
+  }
+
+  // Sort by length to find common patterns
+  cleanedNames.sort((a, b) => a.length - b.length);
+  const shortest = cleanedNames[0];
+
+  // Find longest common prefix
+  let commonPrefix = '';
+  for (let i = 0; i < shortest.length; i++) {
+    const char = shortest[i];
+    if (cleanedNames.every(name => name[i] === char)) {
+      commonPrefix += char;
+    } else {
+      break;
+    }
+  }
+
+  // Clean up the common prefix (remove trailing dashes, spaces, etc)
+  let result = commonPrefix
+    .replace(/[-_\s]+$/, '')  // Remove trailing dashes, underscores, spaces
     .trim();
+
+  // If common prefix is too short or empty, try finding common words
+  if (result.length < 3) {
+    // Extract first few words that appear in all filenames
+    const firstFileWords = cleanedNames[0].split(/\s+/).filter(w => w.length > 0 && !/^\d+$/.test(w));
+    const commonWords: string[] = [];
+
+    for (let i = 0; i < firstFileWords.length; i++) {
+      const word = firstFileWords[i];
+
+      if (cleanedNames.every(name => {
+        const words = name.split(/\s+/).filter(w => w.length > 0 && !/^\d+$/.test(w));
+        // Check if word exists at position i before comparing
+        return i < words.length && words[i] === word;
+      })) {
+        commonWords.push(word);
+      } else {
+        break;
+      }
+    }
+
+    result = commonWords.join(' ').trim();
+  }
+
+  // Fallback: if still empty, use the shortest cleaned name
+  if (!result || result.length < 2) {
+    result = cleanedNames[0];
+  }
+
+  // Final cleanup: remove any remaining trailing numbers or dashes
+  result = result
+    .replace(/\s*-\s*$/, '')
+    .replace(/\s+\d+\s*$/, '')
+    .trim();
+
+  return result;
 }
 
 function cleanMovieTitle(filename: string): string {
@@ -143,11 +217,11 @@ function cleanMovieTitle(filename: string): string {
     .trim();
 }
 
-async function scanFolderForVideos(folderPath: string, folderSeason: string | number | null = null): Promise<{ videos: VideoFile[], subtitles: Map<string, string[]> }> {
+async function scanFolderForVideos(folderPath: string, folderSeason: number | null = null): Promise<{ videos: VideoFile[], subtitles: Map<string, string[]> }> {
   const videos: VideoFile[] = [];
   const subtitles = new Map<string, string[]>();
   const folderName = basename(folderPath);
-  
+
   // Extract season from folder name if not provided
   const seasonFromFolder = folderSeason ?? extractSeasonNumber(folderName);
 
@@ -156,7 +230,7 @@ async function scanFolderForVideos(folderPath: string, folderSeason: string | nu
 
     for (const entry of entries) {
       const fullPath = join(folderPath, entry);
-      
+
       try {
         const stats = await stat(fullPath);
 
@@ -165,7 +239,7 @@ async function scanFolderForVideos(folderPath: string, folderSeason: string | nu
             const { season, episode } = extractSeasonAndEpisode(entry);
             // Use season from filename if available, otherwise from folder
             const finalSeason = season ?? seasonFromFolder;
-            
+
             videos.push({
               filename: entry,
               filePath: fullPath,
@@ -212,21 +286,21 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
 
   try {
     const entries = await readdir(rootPath);
-    
+
     for (const entry of entries) {
       const entryPath = join(rootPath, entry);
-      
+
       try {
         const stats = await stat(entryPath);
 
         if (stats.isDirectory()) {
           // This is a subfolder - could be a category (Movies, Series) or a series folder
           const { videos: subVideos } = await scanFolderForVideos(entryPath);
-          
+
           // Check for nested subfolders (like Series/ShowName/)
           const subEntries = await readdir(entryPath);
           const subDirs: string[] = [];
-          
+
           for (const subEntry of subEntries) {
             const subPath = join(entryPath, subEntry);
             try {
@@ -242,23 +316,22 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
           if (subDirs.length > 0 && subVideos.length === 0) {
             // This is a CATEGORY folder (like "Series") containing series subfolders
             console.log(`  📁 Category folder: ${entry}`);
-            
+
             for (const subDir of subDirs) {
               const seriesPath = join(entryPath, subDir);
               const seasonFromFolder = extractSeasonNumber(subDir);
               const { videos } = await scanFolderForVideos(seriesPath, seasonFromFolder);
-              
+
               if (videos.length > 0) {
-                const seriesName = cleanSeriesName(entry);
-                const seriesSeasonName = seriesName + (seasonFromFolder ? ` Season ${seasonFromFolder}` : ` ${subDir}`);
+                const seriesName = extractSeriesNameFromFilenames(videos);
                 // Include season in seriesId to distinguish seasons
                 const baseId = subDir.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-                const seriesId = seasonFromFolder 
+                const seriesId = seasonFromFolder
                   ? `${baseId}_s${seasonFromFolder.toString().padStart(2, '0')}`
                   : baseId;
-                
-                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesSeasonName}"`);
-                
+
+                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesName}"`);
+
                 results.push({
                   id: seriesId,
                   name: seriesName,
@@ -268,25 +341,24 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
                     // Sort by season first, then episode
                     const seasonA = a.seasonNumber ?? 0;
                     const seasonB = b.seasonNumber ?? 0;
-                    // TODO: Season Number could be string - handle that case
-                    if (seasonA !== seasonB && typeof(seasonA) === 'number' && typeof(seasonB) === 'number') return seasonA - seasonB;
+                    if (seasonA !== seasonB) return seasonA - seasonB;
                     return a.episodeNumber - b.episodeNumber;
                   }),
                   seasonNumber: seasonFromFolder,
                 });
               }
             }
-            
+
             // Also check for loose video files in category (like Movies/movie.mp4)
             if (subVideos.length > 0) {
               console.log(`    🎬 Loose videos in ${entry}: ${subVideos.length}`);
-              
+
               for (const video of subVideos) {
                 const movieTitle = cleanMovieTitle(video.filename);
                 const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-                
+
                 console.log(`      🎬 Movie: ${video.filename} → search: "${movieTitle}"`);
-                
+
                 results.push({
                   id: `movie_${movieId}`,
                   name: movieTitle,
@@ -304,9 +376,9 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
               const video = subVideos[0];
               const movieTitle = cleanMovieTitle(video.filename);
               const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-              
+
               console.log(`  🎬 Movie: ${video.filename} → search: "${movieTitle}"`);
-              
+
               results.push({
                 id: `movie_${movieId}`,
                 name: movieTitle,
@@ -316,16 +388,16 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
                 seasonNumber: null,
               });
             } else {
-              // Multiple videos = Series (folder name is series name)
-              const seriesName = cleanSeriesName(entry);
+              // Multiple videos = Series (extract name from filenames)
+              const seriesName = extractSeriesNameFromFilenames(subVideos);
               const seasonFromFolder = extractSeasonNumber(entry);
               const baseId = entry.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-              const seriesId = seasonFromFolder 
+              const seriesId = seasonFromFolder
                 ? `${baseId}_s${seasonFromFolder.toString().padStart(2, '0')}`
                 : baseId;
-              
+
               console.log(`  📺 Series: ${entry} (${subVideos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesName}"`);
-              
+
               results.push({
                 id: seriesId,
                 name: seriesName,
@@ -335,7 +407,7 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
                   // Sort by season first, then episode
                   const seasonA = a.seasonNumber ?? 0;
                   const seasonB = b.seasonNumber ?? 0;
-                  if (seasonA !== seasonB && typeof(seasonA) === 'number' && typeof(seasonB) === 'number') return seasonA - seasonB;
+                  if (seasonA !== seasonB) return seasonA - seasonB;
                   return a.episodeNumber - b.episodeNumber;
                 }),
                 seasonNumber: seasonFromFolder,
@@ -346,9 +418,9 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
           // Video file directly in root - treat as standalone movie
           const movieTitle = cleanMovieTitle(entry);
           const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-          
+
           console.log(`  🎬 Movie (root): ${entry} → search: "${movieTitle}"`);
-          
+
           const { episode: movieEpisode } = extractSeasonAndEpisode(entry);
           results.push({
             id: `movie_${movieId}`,
@@ -389,10 +461,10 @@ const folderHandler = {
 
     return await scanDirectory(folderPath);
   },
-  
+
   async scanMultipleFolders(folderPaths: string[]): Promise<ScannedMedia[]> {
     const allResults: ScannedMedia[] = [];
-    
+
     for (const folderPath of folderPaths) {
       try {
         const results = await scanDirectory(folderPath);
@@ -401,7 +473,7 @@ const folderHandler = {
         console.error(`Error scanning ${folderPath}:`, error);
       }
     }
-    
+
     return allResults;
   },
 };

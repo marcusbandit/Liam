@@ -299,7 +299,7 @@ function SettingsTab() {
 │       │   └── ...
 │       └── ...
 └── 🎬 Standalone Movie.mp4      → Treated as movie`}</pre>
-          <p><strong>Metadata Priority:</strong> AniList → MyAnimeList → TVDB</p>
+          <p><strong>Metadata Priority:</strong> AniList → MyAnimeList</p> 
         </div>
       </div>
     </div>
