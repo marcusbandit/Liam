@@ -46,6 +46,16 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
   }
   
+  // Conditionally enable dev tools in dev mode only
+  if (process.env.DEV_MODE === 'true') {
+    mainWindow.webContents.openDevTools();
+    mainWindow.webContents.on('before-input-event', (_event, input) => {
+      if (input.control && input.shift && input.key.toLowerCase() === 'i') {
+        mainWindow?.webContents.toggleDevTools();
+      }
+    });
+  }
+  
   // Log renderer errors
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
     console.error('Renderer failed to load:', errorCode, errorDescription);
@@ -77,7 +87,7 @@ app.whenReady().then(() => {
       filePath = '/' + filePath;
     }
     
-    console.log('Media request:', filePath);
+    // console.log('Media request:', filePath); // TODO: Uncomment this for debugging
     
     // Check if file exists
     if (!existsSync(filePath)) {
@@ -372,6 +382,7 @@ ipcMain.handle('scan-and-fetch-metadata', async (_event, folderPath: string) => 
         // Update file info but keep metadata
         newMetadata[mediaId] = {
           ...existing,
+          seriesId: mediaId,
           title: cachedTitle,
           fileEpisodes: media.files.map(f => ({
             episodeNumber: f.episodeNumber,

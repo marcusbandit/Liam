@@ -3650,15 +3650,17 @@ const runRequest = async (input) => {
   };
   const fetcher = createFetcher(config.method);
   const fetchResponse = await fetcher(config);
+  const body = await fetchResponse.text();
   let result;
   try {
-    result = await parseResultFromResponse(fetchResponse, input.fetchOptions.jsonSerializer ?? defaultJsonSerializer);
+    result = parseResultFromText(body, fetchResponse.headers.get(CONTENT_TYPE_HEADER), input.fetchOptions.jsonSerializer ?? defaultJsonSerializer);
   } catch (error) {
     result = error;
   }
   const clientResponseBase = {
     status: fetchResponse.status,
-    headers: fetchResponse.headers
+    headers: fetchResponse.headers,
+    body
   };
   if (!fetchResponse.ok) {
     if (result instanceof Error) {
@@ -3710,9 +3712,7 @@ const executionResultClientResponseFields = ($params) => (executionResult) => {
     errors: $params.fetchOptions.errorPolicy === `all` ? executionResult.errors : void 0
   };
 };
-const parseResultFromResponse = async (response, jsonSerializer) => {
-  const contentType = response.headers.get(CONTENT_TYPE_HEADER);
-  const text = await response.text();
+const parseResultFromText = (text, contentType, jsonSerializer) => {
   if (contentType && isGraphQLContentType(contentType)) {
     return parseGraphQLExecutionResult(jsonSerializer.parse(text));
   } else {
@@ -9997,19 +9997,21 @@ function requireSupportsColor() {
   const tty = require$$1$2;
   const hasFlag2 = requireHasFlag();
   const { env } = process;
-  let forceColor;
+  let flagForceColor;
   if (hasFlag2("no-color") || hasFlag2("no-colors") || hasFlag2("color=false") || hasFlag2("color=never")) {
-    forceColor = 0;
+    flagForceColor = 0;
   } else if (hasFlag2("color") || hasFlag2("colors") || hasFlag2("color=true") || hasFlag2("color=always")) {
-    forceColor = 1;
+    flagForceColor = 1;
   }
-  if ("FORCE_COLOR" in env) {
-    if (env.FORCE_COLOR === "true") {
-      forceColor = 1;
-    } else if (env.FORCE_COLOR === "false") {
-      forceColor = 0;
-    } else {
-      forceColor = env.FORCE_COLOR.length === 0 ? 1 : Math.min(parseInt(env.FORCE_COLOR, 10), 3);
+  function envForceColor() {
+    if ("FORCE_COLOR" in env) {
+      if (env.FORCE_COLOR === "true") {
+        return 1;
+      }
+      if (env.FORCE_COLOR === "false") {
+        return 0;
+      }
+      return env.FORCE_COLOR.length === 0 ? 1 : Math.min(Number.parseInt(env.FORCE_COLOR, 10), 3);
     }
   }
   function translateLevel(level) {
@@ -10023,15 +10025,22 @@ function requireSupportsColor() {
       has16m: level >= 3
     };
   }
-  function supportsColor(haveStream, streamIsTTY) {
+  function supportsColor(haveStream, { streamIsTTY, sniffFlags = true } = {}) {
+    const noFlagForceColor = envForceColor();
+    if (noFlagForceColor !== void 0) {
+      flagForceColor = noFlagForceColor;
+    }
+    const forceColor = sniffFlags ? flagForceColor : noFlagForceColor;
     if (forceColor === 0) {
       return 0;
     }
-    if (hasFlag2("color=16m") || hasFlag2("color=full") || hasFlag2("color=truecolor")) {
-      return 3;
-    }
-    if (hasFlag2("color=256")) {
-      return 2;
+    if (sniffFlags) {
+      if (hasFlag2("color=16m") || hasFlag2("color=full") || hasFlag2("color=truecolor")) {
+        return 3;
+      }
+      if (hasFlag2("color=256")) {
+        return 2;
+      }
     }
     if (haveStream && !streamIsTTY && forceColor === void 0) {
       return 0;
@@ -10048,7 +10057,7 @@ function requireSupportsColor() {
       return 1;
     }
     if ("CI" in env) {
-      if (["TRAVIS", "CIRCLECI", "APPVEYOR", "GITLAB_CI", "GITHUB_ACTIONS", "BUILDKITE"].some((sign2) => sign2 in env) || env.CI_NAME === "codeship") {
+      if (["TRAVIS", "CIRCLECI", "APPVEYOR", "GITLAB_CI", "GITHUB_ACTIONS", "BUILDKITE", "DRONE"].some((sign2) => sign2 in env) || env.CI_NAME === "codeship") {
         return 1;
       }
       return min2;
@@ -10060,7 +10069,7 @@ function requireSupportsColor() {
       return 3;
     }
     if ("TERM_PROGRAM" in env) {
-      const version = parseInt((env.TERM_PROGRAM_VERSION || "").split(".")[0], 10);
+      const version = Number.parseInt((env.TERM_PROGRAM_VERSION || "").split(".")[0], 10);
       switch (env.TERM_PROGRAM) {
         case "iTerm.app":
           return version >= 3 ? 3 : 2;
@@ -10079,14 +10088,17 @@ function requireSupportsColor() {
     }
     return min2;
   }
-  function getSupportLevel(stream2) {
-    const level = supportsColor(stream2, stream2 && stream2.isTTY);
+  function getSupportLevel(stream2, options = {}) {
+    const level = supportsColor(stream2, {
+      streamIsTTY: stream2 && stream2.isTTY,
+      ...options
+    });
     return translateLevel(level);
   }
   supportsColor_1 = {
     supportsColor: getSupportLevel,
-    stdout: translateLevel(supportsColor(true, tty.isatty(1))),
-    stderr: translateLevel(supportsColor(true, tty.isatty(2)))
+    stdout: getSupportLevel({ isTTY: tty.isatty(1) }),
+    stderr: getSupportLevel({ isTTY: tty.isatty(2) })
   };
   return supportsColor_1;
 }
@@ -13786,6 +13798,14 @@ function createWindow() {
   {
     mainWindow.loadURL("http://localhost:5173");
   }
+  if (process.env.DEV_MODE === "true") {
+    mainWindow.webContents.openDevTools();
+    mainWindow.webContents.on("before-input-event", (_event, input) => {
+      if (input.control && input.shift && input.key.toLowerCase() === "i") {
+        mainWindow?.webContents.toggleDevTools();
+      }
+    });
+  }
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     console.error("Renderer failed to load:", errorCode, errorDescription);
   });
@@ -13808,7 +13828,6 @@ app.whenReady().then(() => {
     if (!filePath.startsWith("/")) {
       filePath = "/" + filePath;
     }
-    console.log("Media request:", filePath);
     if (!existsSync(filePath)) {
       console.error("File not found:", filePath);
       return new Response("File not found", { status: 404 });
@@ -14042,6 +14061,7 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
         }
         newMetadata[mediaId] = {
           ...existing,
+          seriesId: mediaId,
           title: cachedTitle,
           fileEpisodes: media.files.map((f) => ({
             episodeNumber: f.episodeNumber,

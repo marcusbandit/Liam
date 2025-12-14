@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useMetadata } from '../hooks/useMetadata';
+import Button from './Button';
+import { Folder, RefreshCw, Image, FileText, Trash2, Info } from 'lucide-react';
 
 interface CacheStats {
   count: number;
@@ -177,7 +179,7 @@ function SettingsTab() {
   return (
     <div className="settings-container">
       <div className="settings-section">
-        <h2 className="settings-title">📁 Media Folder Sources</h2>
+        <h2 className="settings-title"><Folder size={20} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} /> Media Folder Sources</h2>
         <p className="settings-description">
           Add folders containing your anime. Each folder will be scanned for series and movies.
         </p>
@@ -192,20 +194,21 @@ function SettingsTab() {
               <div key={index} className="folder-item">
                 <div className="folder-path">{folder}</div>
                 <div className="folder-actions">
-                  <button
-                    className="button button-small"
+                  <Button
+                    size="small"
                     onClick={() => handleScanFolder(folder)}
                     disabled={scanning}
                   >
                     Scan
-                  </button>
-                  <button
-                    className="button button-small button-danger"
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="small"
                     onClick={() => handleRemoveFolder(folder)}
                     disabled={scanning}
                   >
                     Remove
-                  </button>
+                  </Button>
                 </div>
               </div>
             ))}
@@ -213,22 +216,21 @@ function SettingsTab() {
         )}
 
         <div className="settings-buttons">
-          <button
-            className="button"
+          <Button
             onClick={handleAddFolder}
             disabled={scanning}
           >
             + Add Folder
-          </button>
+          </Button>
           
           {folderSources.length > 0 && (
-            <button
-              className="button button-primary"
+            <Button
+              variant="primary"
               onClick={handleScanAll}
               disabled={scanning}
             >
-              {scanning ? 'Scanning...' : '🔄 Scan All Folders'}
-            </button>
+              {scanning ? 'Scanning...' : <><RefreshCw size={16} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} /> Scan All Folders</>}
+            </Button>
           )}
         </div>
 
@@ -241,45 +243,43 @@ function SettingsTab() {
       </div>
 
       <div className="settings-section">
-        <h2 className="settings-title">💾 Cache & Storage</h2>
+        <h2 className="settings-title"><FileText size={20} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} /> Cache & Storage</h2>
         <p className="settings-description">
           Images and metadata are cached locally for faster loading and offline access.
         </p>
         
         <div className="cache-stats">
           <div className="cache-stat">
-            <span className="cache-stat-label">📷 Cached Images:</span>
+            <span className="cache-stat-label"><Image size={16} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} /> Cached Images:</span>
             <span className="cache-stat-value">{cacheStats.count} files ({formatBytes(cacheStats.sizeBytes)})</span>
           </div>
         </div>
         
         <div className="settings-buttons">
-          <button
-            className="button"
+          <Button
             onClick={handleClearImageCache}
             disabled={scanning}
           >
-            🖼️ Clear Image Cache
-          </button>
-          <button
-            className="button"
+            <Image size={16} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} /> Clear Image Cache
+          </Button>
+          <Button
             onClick={handleClearMetadata}
             disabled={scanning}
           >
-            📋 Clear Metadata
-          </button>
-          <button
-            className="button button-danger"
+            <FileText size={16} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} /> Clear Metadata
+          </Button>
+          <Button
+            variant="danger"
             onClick={handleClearAll}
             disabled={scanning}
           >
-            🗑️ Clear All Cache
-          </button>
+            <Trash2 size={16} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} /> Clear All Cache
+          </Button>
         </div>
       </div>
 
       <div className="settings-section">
-        <h2 className="settings-title">ℹ️ How It Works</h2>
+        <h2 className="settings-title"><Info size={20} style={{ display: 'inline', marginRight: '0.5rem', verticalAlign: 'middle' }} /> How It Works</h2>
         <div className="settings-info">
           <p><strong>Folder Structure:</strong></p>
           <pre className="code-block">{`📁 Your Anime Folder/

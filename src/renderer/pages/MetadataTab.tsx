@@ -1,7 +1,9 @@
-import Button from './subcomponents/Button';
 import { useState, useMemo } from 'react';
 import { useMetadata, type SeriesMetadata } from '../hooks/useMetadata';
 import { Link } from 'react-router-dom';
+import Button from '../components/Button';
+import { BookOpen, Tv, Film, Star, Link as LinkIcon, Search, X, Folder, Calendar, Building, ChevronUp, ChevronDown, LayoutGrid, List } from 'lucide-react';
+import { normalizeRating, getDisplayRating } from '../utils/ratingUtils';
 
 type SortOption = 'title' | 'episodes' | 'score' | 'status' | 'source';
 type ViewMode = 'grid' | 'list';
@@ -33,7 +35,8 @@ function MetadataTab() {
       data.genres?.forEach(g => genreSet.add(g));
       totalEpisodes += data.episodes?.length || 0;
       if (data.averageScore) {
-        avgScore += data.averageScore;
+        const normalized = normalizeRating(data.averageScore, data.source) || 0;
+        avgScore += normalized;
         scoreCount++;
       }
     });
@@ -71,7 +74,9 @@ function MetadataTab() {
           comparison = (dataA.episodes?.length || 0) - (dataB.episodes?.length || 0);
           break;
         case 'score':
-          comparison = (dataA.averageScore || 0) - (dataB.averageScore || 0);
+          const scoreA = normalizeRating(dataA.averageScore, dataA.source) || 0;
+          const scoreB = normalizeRating(dataB.averageScore, dataB.source) || 0;
+          comparison = scoreA - scoreB;
           break;
         case 'status':
           comparison = (dataA.status || '').localeCompare(dataB.status || '');
@@ -181,10 +186,10 @@ function MetadataTab() {
   if (seriesList.length === 0) {
     return (
       <div className="metadata-empty">
-        <div className="empty-icon">📚</div>
+        <BookOpen className="empty-icon" size={48} />
         <h2>No Metadata Found</h2>
         <p>Your library is empty. Add some anime folders in Settings and scan them to get started.</p>
-        <Link to="/settings" className="button">Go to Settings</Link>
+        <Button as="link" to="/settings">Go to Settings</Button>
       </div>
     );
   }
@@ -194,28 +199,28 @@ function MetadataTab() {
       {/* Stats Header */}
       <div className="metadata-stats">
         <div className="stat-card">
-          <div className="stat-icon">📺</div>
+          <Tv className="stat-icon" size={24} />
           <div className="stat-content">
             <span className="stat-value">{stats.totalSeries}</span>
             <span className="stat-label">Series</span>
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-icon">🎬</div>
+          <Film className="stat-icon" size={24} />
           <div className="stat-content">
             <span className="stat-value">{stats.totalEpisodes}</span>
             <span className="stat-label">Episodes</span>
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-icon">⭐</div>
+          <Star className="stat-icon" size={24} />
           <div className="stat-content">
             <span className="stat-value">{stats.avgScore || '—'}</span>
             <span className="stat-label">Avg Score</span>
           </div>
         </div>
         <div className="stat-card sources">
-          <div className="stat-icon">🔗</div>
+          <LinkIcon className="stat-icon" size={24} />
           <div className="stat-content">
             <span className="stat-value">{sources.length}</span>
             <span className="stat-label">Sources</span>
@@ -227,7 +232,7 @@ function MetadataTab() {
       <div className="metadata-controls">
         <div className="controls-left">
           <div className="search-wrapper">
-            <span className="search-icon">🔍</span>
+            <Search className="search-icon" size={18} />
             <input
               type="text"
               className="search-input"
@@ -236,7 +241,9 @@ function MetadataTab() {
               onChange={(e) => setSearchQuery(e.target.value)}
             />
             {searchQuery && (
-              <button className="search-clear" onClick={() => setSearchQuery('')}>×</button>
+              <Button className="search-clear" onClick={() => setSearchQuery('')}>
+                <X size={18} />
+              </Button>
             )}
           </div>
           
@@ -282,25 +289,25 @@ function MetadataTab() {
               title={sortOrder === 'asc' ? 'Ascending' : 'Descending'}
               size="small"
             >
-              {sortOrder === 'asc' ? '↑' : '↓'}
+              {sortOrder === 'asc' ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
             </Button>
           </div>
 
           <div className="view-toggle">
-            <button
+            <Button
               className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`}
               onClick={() => setViewMode('grid')}
               title="Grid View"
             >
-              ▦
-            </button>
-            <button
+              <LayoutGrid size={18} />
+            </Button>
+            <Button
               className={`view-btn ${viewMode === 'list' ? 'active' : ''}`}
               onClick={() => setViewMode('list')}
               title="List View"
             >
-              ☰
-            </button>
+              <List size={18} />
+            </Button>
           </div>
 
           <Button
@@ -324,15 +331,15 @@ function MetadataTab() {
       {/* Series Grid/List */}
       {filteredSeries.length === 0 ? (
         <div className="no-results">
-          <div className="no-results-icon">🔎</div>
+          <Search className="no-results-icon" size={48} />
           <p>No series match your filters</p>
-          <button className="button-secondary" onClick={() => {
+          <Button variant="secondary" onClick={() => {
             setSearchQuery('');
             setFilterSource('all');
             setFilterGenre('all');
           }}>
             Clear Filters
-          </button>
+          </Button>
         </div>
       ) : (
         <div className={`metadata-grid ${viewMode}`}>
@@ -346,10 +353,14 @@ function MetadataTab() {
                 {seriesData.poster ? (
                   <img src={seriesData.poster} alt={seriesData.title} loading="lazy" />
                 ) : (
-                  <div className="no-poster">🎬</div>
+                  <div className="no-poster">
+                    <Film size={32} />
+                  </div>
                 )}
                 {seriesData.averageScore && (
-                  <div className="card-score">⭐ {seriesData.averageScore}</div>
+                  <div className="card-score">
+                    <Star size={14} /> {getDisplayRating(seriesData.averageScore, seriesData.source)}
+                  </div>
                 )}
               </div>
 
@@ -380,18 +391,18 @@ function MetadataTab() {
 
                 <div className="card-meta">
                   <span className="meta-item">
-                    <span className="meta-icon">📁</span>
+                    <Folder className="meta-icon" size={16} />
                     {seriesData.episodes?.length || 0} / {seriesData.totalEpisodes || '?'} episodes
                   </span>
                   {seriesData.startDate && (
                     <span className="meta-item">
-                      <span className="meta-icon">📅</span>
+                      <Calendar className="meta-icon" size={16} />
                       {seriesData.startDate}
                     </span>
                   )}
                   {seriesData.studios && seriesData.studios.length > 0 && (
                     <span className="meta-item">
-                      <span className="meta-icon">🏢</span>
+                      <Building className="meta-icon" size={16} />
                       {seriesData.studios.slice(0, 2).join(', ')}
                     </span>
                   )}
@@ -416,20 +427,20 @@ function MetadataTab() {
                         : seriesData.description.substring(0, 150) + (seriesData.description.length > 150 ? '...' : '')
                     }} />
                     {seriesData.description.length > 150 && (
-                      <button 
+                      <Button 
                         className="expand-btn"
                         onClick={() => toggleExpanded(seriesId)}
                       >
                         {expandedCards.has(seriesId) ? 'Show less' : 'Show more'}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 )}
 
                 <div className="card-actions">
-                  <Link to={`/series/${seriesId}`} className="button-secondary view-btn">
+                  <Button as="link" to={`/series/${seriesId}`} variant="secondary" className="view-btn">
                     View Series
-                  </Link>
+                  </Button>
                   <Button
                     variant="primary"
                     size="small"

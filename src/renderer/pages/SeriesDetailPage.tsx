@@ -1,6 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMetadata, type EpisodeMetadata, type FileEpisode } from '../hooks/useMetadata';
-import EpisodeCard from './EpisodeCard';
+import EpisodeCard from '../components/EpisodeCard';
+import { Star, Calendar, Clock, Tv, Film, Play, AlertTriangle, ArrowLeft, Home } from 'lucide-react';
+import { getDisplayRating } from '../utils/ratingUtils';
 
 // Helper to convert local file path to media:// URL
 function getImageUrl(localPath?: string | null, remotePath?: string | null): string | null {
@@ -55,7 +57,10 @@ function SeriesDetailPage() {
   if (!seriesId) {
     return (
       <div className="error">
-        Series ID not provided. <button className="button" onClick={() => navigate('/')}>Go Home</button>
+        <p>Series ID not provided.</p>
+        <button className="action-btn action-btn-secondary" onClick={() => navigate('/')}>
+          <Home size={16} /> Go Home
+        </button>
       </div>
     );
   }
@@ -65,7 +70,10 @@ function SeriesDetailPage() {
   if (!seriesData) {
     return (
       <div className="error">
-        Series not found. <button className="button" onClick={() => navigate('/')}>Go Home</button>
+        <p>Series not found.</p>
+        <button className="action-btn action-btn-secondary" onClick={() => navigate('/')}>
+          <Home size={16} /> Go Home
+        </button>
       </div>
     );
   }
@@ -253,7 +261,7 @@ function SeriesDetailPage() {
               />
             ) : (
               <div className="detail-poster-placeholder">
-                <span>{isMovie ? '🎬' : '📺'}</span>
+                {isMovie ? <Film size={64} /> : <Tv size={64} />}
               </div>
             )}
           </div>
@@ -270,35 +278,35 @@ function SeriesDetailPage() {
             <div className="detail-stats">
               {seriesData.averageScore && (
                 <div className="detail-stat detail-stat-score">
-                  <span className="stat-icon">★</span>
-                  <span className="stat-value">{(seriesData.averageScore / 10).toFixed(1)}</span>
+                  <Star className="stat-icon" size={16} />
+                  <span className="stat-value">{getDisplayRating(seriesData.averageScore, seriesData.source)}</span>
                 </div>
               )}
               
               {releaseYear && (
                 <div className="detail-stat">
-                  <span className="stat-icon">📅</span>
+                  <Calendar className="stat-icon" size={16} />
                   <span className="stat-value">{releaseYear}</span>
                 </div>
               )}
               
               {durationText && (
                 <div className="detail-stat">
-                  <span className="stat-icon">⏱</span>
+                  <Clock className="stat-icon" size={16} />
                   <span className="stat-value">{durationText}</span>
                 </div>
               )}
               
               {!isMovie && seriesData.totalEpisodes && (
                 <div className="detail-stat">
-                  <span className="stat-icon">📺</span>
+                  <Tv className="stat-icon" size={16} />
                   <span className="stat-value">{seriesData.totalEpisodes} eps</span>
                 </div>
               )}
               
               {isMovie && (
                 <div className="detail-stat detail-stat-movie">
-                  <span className="stat-icon">🎬</span>
+                  <Film className="stat-icon" size={16} />
                   <span className="stat-value">Movie</span>
                 </div>
               )}
@@ -351,28 +359,29 @@ function SeriesDetailPage() {
             <div className="detail-actions">
               {isMovie ? (
                 hasFile ? (
-                  <button className="detail-play-button movie-play" onClick={handlePlay}>
-                    <span className="play-icon">▶</span>
-                    <span className="play-text">Play Movie</span>
-                    {durationText && <span className="play-duration">{durationText}</span>}
+                  <button className="action-btn action-btn-play" onClick={handlePlay}>
+                    <Play size={18} strokeWidth={2.5} />
+                    <span>Play Movie</span>
+                    {durationText && <span className="action-btn-meta">{durationText}</span>}
                   </button>
                 ) : (
                   <div className="detail-unavailable">
-                    <span className="unavailable-icon">⚠</span>
+                    <AlertTriangle className="unavailable-icon" size={20} />
                     <span>Movie file not available</span>
                   </div>
                 )
               ) : (
                 availableCount > 0 && (
-                  <button className="detail-play-button" onClick={handlePlaySeries}>
-                    <span className="play-icon">▶</span>
-                    <span className="play-text">Play</span>
+                  <button className="action-btn action-btn-play" onClick={handlePlaySeries}>
+                    <Play size={18} strokeWidth={2.5} />
+                    <span>Play</span>
                   </button>
                 )
               )}
               
-              <button className="detail-back-button" onClick={() => navigate('/')}>
-                ← Back
+              <button className="action-btn action-btn-secondary" onClick={() => navigate('/')}>
+                <ArrowLeft size={16} strokeWidth={2} />
+                <span>Back</span>
               </button>
             </div>
           </div>
