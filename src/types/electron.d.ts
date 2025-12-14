@@ -28,6 +28,7 @@ export interface ElectronAPI {
   saveMetadata: (metadata: Record<string, unknown>) => Promise<boolean>;
   loadMetadata: () => Promise<Record<string, unknown>>;
   clearMetadata: () => Promise<boolean>;
+  deleteSeries: (seriesId: string) => Promise<boolean>;
   getSeriesEpisodes: (seriesId: string) => Promise<unknown[]>;
   
   // Image cache

@@ -270,6 +270,104 @@ const imageCacheHandler = {
   },
 
   /**
+   * Delete cached images for a specific series
+   */
+  async deleteSeriesImages(seriesData: {
+    poster?: string | null;
+    banner?: string | null;
+    posterLocal?: string | null;
+    bannerLocal?: string | null;
+    episodes?: Array<{
+      thumbnail?: string | null;
+      thumbnailLocal?: string | null;
+    }>;
+  }): Promise<void> {
+    try {
+      const cacheIndex = await loadCacheIndex();
+      const imageUrls: (string | null | undefined)[] = [
+        seriesData.poster,
+        seriesData.banner,
+      ];
+
+      // Add episode thumbnails
+      if (seriesData.episodes) {
+        for (const ep of seriesData.episodes) {
+          if (ep.thumbnail) {
+            imageUrls.push(ep.thumbnail);
+          }
+        }
+      }
+
+      let deletedCount = 0;
+      for (const url of imageUrls) {
+        if (!url) continue;
+
+        const entry = cacheIndex[url];
+        if (entry) {
+          try {
+            // Delete the file if it exists
+            if (await fileExists(entry.localPath)) {
+              await rm(entry.localPath, { force: true });
+              deletedCount++;
+            }
+            // Remove from index
+            delete cacheIndex[url];
+          } catch (error) {
+            console.error(`Error deleting cached image ${entry.localPath}:`, error);
+          }
+        }
+      }
+
+      // Also check local paths directly
+      const localPaths: (string | null | undefined)[] = [
+        seriesData.posterLocal,
+        seriesData.bannerLocal,
+      ];
+
+      if (seriesData.episodes) {
+        for (const ep of seriesData.episodes) {
+          if (ep.thumbnailLocal) {
+            localPaths.push(ep.thumbnailLocal);
+          }
+        }
+      }
+
+      for (const localPath of localPaths) {
+        if (!localPath) continue;
+        
+        // Extract actual file path from media:// URL if needed
+        const actualPath = localPath.startsWith('media://')
+          ? decodeURIComponent(localPath.replace('media://', ''))
+          : localPath;
+
+        try {
+          if (await fileExists(actualPath)) {
+            await rm(actualPath, { force: true });
+            deletedCount++;
+          }
+        } catch (error) {
+          console.error(`Error deleting local image ${actualPath}:`, error);
+        }
+
+        // Remove from cache index if found
+        for (const [url, entry] of Object.entries(cacheIndex)) {
+          if (entry.localPath === actualPath) {
+            delete cacheIndex[url];
+            break;
+          }
+        }
+      }
+
+      // Save updated cache index
+      await saveCacheIndex(cacheIndex);
+      console.log(`Deleted ${deletedCount} cached images for series`);
+    } catch (error) {
+      console.error('Error deleting series images:', error);
+      throw error;
+    }
+  },
+
+  /**
    * Get the base cache directory path
    */
   getCachePath(): string {

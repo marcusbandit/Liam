@@ -370,49 +370,31 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
               }
             }
           } else if (subVideos.length > 0) {
-            // This folder directly contains videos - treat as series or movies based on count
-            if (subVideos.length === 1) {
-              // Single video = Movie
-              const video = subVideos[0];
-              const movieTitle = cleanMovieTitle(video.filename);
-              const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+// This folder directly contains videos - treat as series (folder name is series name)
+// Don't assume single video = movie - user may just have 1 episode downloaded
+const seriesName = extractSeriesNameFromFilenames(subVideos);
+const seasonFromFolder = extractSeasonNumber(entry);
+const baseId = entry.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+const seriesId = seasonFromFolder
+  ? `${baseId}_s${seasonFromFolder.toString().padStart(2, '0')}`
+  : baseId;
 
-              console.log(`  🎬 Movie: ${video.filename} → search: "${movieTitle}"`);
+console.log(`  📺 Series: ${entry} (${subVideos.length} episode${subVideos.length > 1 ? 's' : ''}${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesName}"`);
 
-              results.push({
-                id: `movie_${movieId}`,
-                name: movieTitle,
-                type: 'movie',
-                folderPath: entryPath,
-                files: [video],
-                seasonNumber: null,
-              });
-            } else {
-              // Multiple videos = Series (extract name from filenames)
-              const seriesName = extractSeriesNameFromFilenames(subVideos);
-              const seasonFromFolder = extractSeasonNumber(entry);
-              const baseId = entry.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-              const seriesId = seasonFromFolder
-                ? `${baseId}_s${seasonFromFolder.toString().padStart(2, '0')}`
-                : baseId;
-
-              console.log(`  📺 Series: ${entry} (${subVideos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesName}"`);
-
-              results.push({
-                id: seriesId,
-                name: seriesName,
-                type: 'series',
-                folderPath: entryPath,
-                files: subVideos.sort((a, b) => {
-                  // Sort by season first, then episode
-                  const seasonA = a.seasonNumber ?? 0;
-                  const seasonB = b.seasonNumber ?? 0;
-                  if (seasonA !== seasonB) return seasonA - seasonB;
-                  return a.episodeNumber - b.episodeNumber;
-                }),
-                seasonNumber: seasonFromFolder,
-              });
-            }
+results.push({
+  id: seriesId,
+  name: seriesName,
+  type: 'series',
+  folderPath: entryPath,
+  files: subVideos.sort((a, b) => {
+    // Sort by season first, then episode
+    const seasonA = a.seasonNumber ?? 0;
+    const seasonB = b.seasonNumber ?? 0;
+    if (seasonA !== seasonB) return seasonA - seasonB;
+    return a.episodeNumber - b.episodeNumber;
+  }),
+  seasonNumber: seasonFromFolder,
+});
           }
         } else if (stats.isFile() && isVideoFile(entry)) {
           // Video file directly in root - treat as standalone movie

@@ -314,6 +314,36 @@ ipcMain.handle('clear-metadata', async () => {
   }
 });
 
+ipcMain.handle('delete-series', async (_event, seriesId: string) => {
+  try {
+    // Get series metadata first to delete associated images
+    const seriesData = await metadataHandler.getSeriesMetadata(seriesId);
+    
+    if (seriesData) {
+      // Delete cached images for this series
+      await imageCacheHandler.deleteSeriesImages(seriesData as {
+        poster?: string | null;
+        banner?: string | null;
+        posterLocal?: string | null;
+        bannerLocal?: string | null;
+        episodes?: Array<{
+          thumbnail?: string | null;
+          thumbnailLocal?: string | null;
+        }>;
+      });
+    }
+    
+    // Delete metadata entry
+    await metadataHandler.deleteSeriesMetadata(seriesId);
+    
+    console.log(`Deleted series: ${seriesId}`);
+    return true;
+  } catch (error) {
+    console.error('Error deleting series:', error);
+    throw error;
+  }
+});
+
 // ==================== SCAN AND FETCH COMBINED ====================
 
 ipcMain.handle('scan-and-fetch-metadata', async (_event, folderPath: string) => {
