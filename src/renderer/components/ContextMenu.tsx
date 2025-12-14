@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, ReactNode } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { ChevronLeft, RefreshCw, FileText } from 'lucide-react';
-import { useMetadata } from '../hooks/useMetadata';
+import { useState, useEffect, useCallback, ReactNode } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { ChevronLeft, RefreshCw, FileText } from "lucide-react";
+import { useMetadata } from "../hooks/useMetadata";
 
 interface MenuPosition {
   x: number;
@@ -35,11 +35,11 @@ function ContextMenu() {
 
   const handleContextMenu = useCallback((e: MouseEvent) => {
     e.preventDefault();
-    
+
     // Position the menu at the cursor, but keep it within viewport
     const x = Math.min(e.clientX, window.innerWidth - 188);
     const y = Math.min(e.clientY, window.innerHeight - 120);
-    
+
     setPosition({ x, y });
     setVisible(true);
   }, []);
@@ -49,7 +49,7 @@ function ContextMenu() {
   }, []);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
+    if (e.key === "Escape") {
       setVisible(false);
     }
   }, []);
@@ -61,47 +61,47 @@ function ContextMenu() {
 
   const handleRescanShow = useCallback(async () => {
     if (!seriesId || !isSeriesDetailPage) return;
-    
+
     setVisible(false);
-    
+
     const seriesData = metadata[seriesId];
     if (!seriesData?.folderPath) {
-      alert('Cannot rescan: folder path not found for this series.');
+      alert("Cannot rescan: folder path not found for this series.");
       return;
     }
 
     try {
       await window.electronAPI.scanAndFetchMetadata(seriesData.folderPath);
       await loadMetadata();
-      alert('Show rescanned successfully!');
+      alert("Show rescanned successfully!");
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      console.error('Error rescanning show:', err);
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      console.error("Error rescanning show:", err);
       alert(`Error rescanning show: ${errorMessage}`);
     }
   }, [seriesId, isSeriesDetailPage, metadata, loadMetadata]);
 
   const handleToMetadata = useCallback(() => {
     setVisible(false);
-    navigate('/metadata');
+    navigate("/metadata");
   }, [navigate]);
 
   useEffect(() => {
-    document.addEventListener('contextmenu', handleContextMenu);
-    document.addEventListener('click', handleClick);
-    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener("contextmenu", handleContextMenu);
+    document.addEventListener("click", handleClick);
+    document.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.removeEventListener('contextmenu', handleContextMenu);
-      document.removeEventListener('click', handleClick);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener("contextmenu", handleContextMenu);
+      document.removeEventListener("click", handleClick);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [handleContextMenu, handleClick, handleKeyDown]);
 
   if (!visible) return null;
 
   return (
-    <div 
+    <div
       className="context-menu"
       style={{
         left: position.x,
@@ -130,5 +130,3 @@ function ContextMenu() {
 }
 
 export default ContextMenu;
-
-
