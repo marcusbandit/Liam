@@ -82,10 +82,15 @@ function extractSeasonNumber(folderName) {
     /Season\s*(\d+)/i
     // "Season 1"
   ];
-  for (const pattern of patterns) {
-    const match = folderName.match(pattern);
-    if (match) {
-      return parseInt(match[1], 10);
+  var matches = folderName.match(/\d+/g);
+  if (matches == null) {
+    return null;
+  } else {
+    for (const pattern of patterns) {
+      const match = folderName.match(pattern);
+      if (match) {
+        return parseInt(match[1], 10);
+      }
     }
   }
   return null;
@@ -178,7 +183,7 @@ async function scanDirectory(rootPath) {
               const { videos } = await scanFolderForVideos(seriesPath, seasonFromFolder);
               if (videos.length > 0) {
                 const seriesName = cleanSeriesName(entry);
-                const seriesSeasonName = seriesName + (seasonFromFolder ? ` Season ${seasonFromFolder}` : "");
+                const seriesSeasonName = seriesName + (seasonFromFolder ? ` Season ${seasonFromFolder}` : ` ${subDir}`);
                 const baseId = subDir.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
                 const seriesId = seasonFromFolder ? `${baseId}_s${seasonFromFolder.toString().padStart(2, "0")}` : baseId;
                 console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesSeasonName}"`);
@@ -190,7 +195,7 @@ async function scanDirectory(rootPath) {
                   files: videos.sort((a, b) => {
                     const seasonA = a.seasonNumber ?? 0;
                     const seasonB = b.seasonNumber ?? 0;
-                    if (seasonA !== seasonB) return seasonA - seasonB;
+                    if (seasonA !== seasonB && typeof seasonA === "number" && typeof seasonB === "number") return seasonA - seasonB;
                     return a.episodeNumber - b.episodeNumber;
                   }),
                   seasonNumber: seasonFromFolder
@@ -241,7 +246,7 @@ async function scanDirectory(rootPath) {
                 files: subVideos.sort((a, b) => {
                   const seasonA = a.seasonNumber ?? 0;
                   const seasonB = b.seasonNumber ?? 0;
-                  if (seasonA !== seasonB) return seasonA - seasonB;
+                  if (seasonA !== seasonB && typeof seasonA === "number" && typeof seasonB === "number") return seasonA - seasonB;
                   return a.episodeNumber - b.episodeNumber;
                 }),
                 seasonNumber: seasonFromFolder
@@ -9997,19 +10002,21 @@ function requireSupportsColor() {
   const tty = require$$1$2;
   const hasFlag2 = requireHasFlag();
   const { env } = process;
-  let forceColor;
+  let flagForceColor;
   if (hasFlag2("no-color") || hasFlag2("no-colors") || hasFlag2("color=false") || hasFlag2("color=never")) {
-    forceColor = 0;
+    flagForceColor = 0;
   } else if (hasFlag2("color") || hasFlag2("colors") || hasFlag2("color=true") || hasFlag2("color=always")) {
-    forceColor = 1;
+    flagForceColor = 1;
   }
-  if ("FORCE_COLOR" in env) {
-    if (env.FORCE_COLOR === "true") {
-      forceColor = 1;
-    } else if (env.FORCE_COLOR === "false") {
-      forceColor = 0;
-    } else {
-      forceColor = env.FORCE_COLOR.length === 0 ? 1 : Math.min(parseInt(env.FORCE_COLOR, 10), 3);
+  function envForceColor() {
+    if ("FORCE_COLOR" in env) {
+      if (env.FORCE_COLOR === "true") {
+        return 1;
+      }
+      if (env.FORCE_COLOR === "false") {
+        return 0;
+      }
+      return env.FORCE_COLOR.length === 0 ? 1 : Math.min(Number.parseInt(env.FORCE_COLOR, 10), 3);
     }
   }
   function translateLevel(level) {
@@ -10023,15 +10030,22 @@ function requireSupportsColor() {
       has16m: level >= 3
     };
   }
-  function supportsColor(haveStream, streamIsTTY) {
+  function supportsColor(haveStream, { streamIsTTY, sniffFlags = true } = {}) {
+    const noFlagForceColor = envForceColor();
+    if (noFlagForceColor !== void 0) {
+      flagForceColor = noFlagForceColor;
+    }
+    const forceColor = sniffFlags ? flagForceColor : noFlagForceColor;
     if (forceColor === 0) {
       return 0;
     }
-    if (hasFlag2("color=16m") || hasFlag2("color=full") || hasFlag2("color=truecolor")) {
-      return 3;
-    }
-    if (hasFlag2("color=256")) {
-      return 2;
+    if (sniffFlags) {
+      if (hasFlag2("color=16m") || hasFlag2("color=full") || hasFlag2("color=truecolor")) {
+        return 3;
+      }
+      if (hasFlag2("color=256")) {
+        return 2;
+      }
     }
     if (haveStream && !streamIsTTY && forceColor === void 0) {
       return 0;
@@ -10048,7 +10062,7 @@ function requireSupportsColor() {
       return 1;
     }
     if ("CI" in env) {
-      if (["TRAVIS", "CIRCLECI", "APPVEYOR", "GITLAB_CI", "GITHUB_ACTIONS", "BUILDKITE"].some((sign2) => sign2 in env) || env.CI_NAME === "codeship") {
+      if (["TRAVIS", "CIRCLECI", "APPVEYOR", "GITLAB_CI", "GITHUB_ACTIONS", "BUILDKITE", "DRONE"].some((sign2) => sign2 in env) || env.CI_NAME === "codeship") {
         return 1;
       }
       return min2;
@@ -10060,7 +10074,7 @@ function requireSupportsColor() {
       return 3;
     }
     if ("TERM_PROGRAM" in env) {
-      const version = parseInt((env.TERM_PROGRAM_VERSION || "").split(".")[0], 10);
+      const version = Number.parseInt((env.TERM_PROGRAM_VERSION || "").split(".")[0], 10);
       switch (env.TERM_PROGRAM) {
         case "iTerm.app":
           return version >= 3 ? 3 : 2;
@@ -10079,14 +10093,17 @@ function requireSupportsColor() {
     }
     return min2;
   }
-  function getSupportLevel(stream2) {
-    const level = supportsColor(stream2, stream2 && stream2.isTTY);
+  function getSupportLevel(stream2, options = {}) {
+    const level = supportsColor(stream2, {
+      streamIsTTY: stream2 && stream2.isTTY,
+      ...options
+    });
     return translateLevel(level);
   }
   supportsColor_1 = {
     supportsColor: getSupportLevel,
-    stdout: translateLevel(supportsColor(true, tty.isatty(1))),
-    stderr: translateLevel(supportsColor(true, tty.isatty(2)))
+    stdout: getSupportLevel({ isTTY: tty.isatty(1) }),
+    stderr: getSupportLevel({ isTTY: tty.isatty(2) })
   };
   return supportsColor_1;
 }
@@ -14061,32 +14078,12 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
       console.log(`Fetching metadata for: ${media.name}${seasonInfo} (${media.type})`);
       let fetchedMetadata = null;
       try {
-        fetchedMetadata = await anilistHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
+        fetchedMetadata = await malHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
         if (fetchedMetadata) {
-          fetchedMetadata = { ...fetchedMetadata, source: "anilist" };
+          fetchedMetadata = { ...fetchedMetadata, source: "mal" };
         }
       } catch (err) {
-        console.log(`  AniList failed for ${media.name}${seasonInfo}`);
-      }
-      if (!fetchedMetadata) {
-        try {
-          fetchedMetadata = await malHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
-          if (fetchedMetadata) {
-            fetchedMetadata = { ...fetchedMetadata, source: "mal" };
-          }
-        } catch (err) {
-          console.log(`  MAL failed for ${media.name}${seasonInfo}`);
-        }
-      }
-      if (!fetchedMetadata) {
-        try {
-          fetchedMetadata = await tvdbHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
-          if (fetchedMetadata) {
-            fetchedMetadata = { ...fetchedMetadata, source: "tvdb" };
-          }
-        } catch (err) {
-          console.log(`  TVDB failed for ${media.name}${seasonInfo}`);
-        }
+        console.log(`  MAL failed for ${media.name}${seasonInfo}`);
       }
       if (fetchedMetadata) {
         console.log(`  📥 Caching images...`);

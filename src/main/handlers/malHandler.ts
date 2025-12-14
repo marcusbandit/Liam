@@ -62,7 +62,7 @@ export interface SeriesMetadata {
 
 export interface EpisodeMetadata {
   episodeNumber: number;
-  seasonNumber?: number | null;
+  seasonNumber?: string | number | null;
   title: string;
   description: string | null;
   airDate: string | null;
@@ -89,7 +89,7 @@ const malHandler = {
     }
   },
 
-  async getEpisodes(animeId: number, totalEpisodes: number | null, seasonNumber?: number | null): Promise<EpisodeMetadata[]> {
+  async getEpisodes(animeId: number, totalEpisodes: number | null, seasonNumber?: string | number | null): Promise<EpisodeMetadata[]> {
     try {
       const response = await axios.get<{ data: JikanEpisode[] }>(`${JIKAN_API_URL}/anime/${animeId}/episodes`);
       
@@ -138,7 +138,7 @@ const malHandler = {
     }
   },
 
-  async searchAndFetchMetadata(seriesName: string, seasonNumber?: number | null): Promise<SeriesMetadata | null> {
+  async searchAndFetchMetadata(seriesName: string, seasonNumber?: string | number | null): Promise<SeriesMetadata | null> {
     try {
       // Include season in search query if available
       const searchQuery = seasonNumber 
@@ -170,7 +170,7 @@ const malHandler = {
     }
   },
 
-  formatMetadata(anime: JikanAnime, episodes: EpisodeMetadata[], seasonNumber?: number | null): SeriesMetadata {
+  formatMetadata(anime: JikanAnime, episodes: EpisodeMetadata[], seasonNumber?: string | number | null): SeriesMetadata {
     // Add season number to title if we searched for a specific season
     let title = anime.title || anime.title_english || anime.title_japanese || '';
     if (seasonNumber) {

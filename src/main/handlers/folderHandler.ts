@@ -9,7 +9,7 @@ export interface VideoFile {
   filePath: string;
   title: string;
   episodeNumber: number;
-  seasonNumber: number | null;
+  seasonNumber: string | number | null;
   subtitlePath: string | null;
   subtitlePaths: string[];
   parentFolder: string;
@@ -21,7 +21,7 @@ export interface ScannedMedia {
   type: 'series' | 'movie';
   folderPath: string;
   files: VideoFile[];
-  seasonNumber: number | null;  // Season number extracted from folder name
+  seasonNumber: string | number | null;  // Season number extracted from folder name
 }
 
 function isVideoFile(filename: string): boolean {
@@ -93,7 +93,7 @@ function extractSeasonAndEpisode(filename: string): { season: number | null; epi
   return { season: null, episode: 1 };
 }
 
-function extractSeasonNumber(folderName: string): number | null {
+function extractSeasonNumber(folderName: string): string | number | null {
   // Try various patterns to extract season number from folder name
   const patterns = [
     /Season\s*(\d+)/i,           // "Season 1" or "Season1"
@@ -101,10 +101,17 @@ function extractSeasonNumber(folderName: string): number | null {
     /Season\s*(\d+)/i,           // "Season 1"
   ];
 
-  for (const pattern of patterns) {
-    const match = folderName.match(pattern);
-    if (match) {
-      return parseInt(match[1], 10);
+  // Try to find any numbers at first to quickly rule out folders without numbers
+  var matches = folderName.match(/\d+/g);
+  if (matches == null) {
+    return null;
+  } else {
+    // Otherwise, try each pattern
+    for (const pattern of patterns) {
+      const match = folderName.match(pattern);
+      if (match) {
+        return parseInt(match[1], 10);
+      }
     }
   }
 
@@ -136,7 +143,7 @@ function cleanMovieTitle(filename: string): string {
     .trim();
 }
 
-async function scanFolderForVideos(folderPath: string, folderSeason: number | null = null): Promise<{ videos: VideoFile[], subtitles: Map<string, string[]> }> {
+async function scanFolderForVideos(folderPath: string, folderSeason: string | number | null = null): Promise<{ videos: VideoFile[], subtitles: Map<string, string[]> }> {
   const videos: VideoFile[] = [];
   const subtitles = new Map<string, string[]>();
   const folderName = basename(folderPath);
@@ -243,7 +250,7 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
               
               if (videos.length > 0) {
                 const seriesName = cleanSeriesName(entry);
-                const seriesSeasonName = seriesName + (seasonFromFolder ? ` Season ${seasonFromFolder}` : '');
+                const seriesSeasonName = seriesName + (seasonFromFolder ? ` Season ${seasonFromFolder}` : ` ${subDir}`);
                 // Include season in seriesId to distinguish seasons
                 const baseId = subDir.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
                 const seriesId = seasonFromFolder 
@@ -261,7 +268,8 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
                     // Sort by season first, then episode
                     const seasonA = a.seasonNumber ?? 0;
                     const seasonB = b.seasonNumber ?? 0;
-                    if (seasonA !== seasonB) return seasonA - seasonB;
+                    // TODO: Season Number could be string - handle that case
+                    if (seasonA !== seasonB && typeof(seasonA) === 'number' && typeof(seasonB) === 'number') return seasonA - seasonB;
                     return a.episodeNumber - b.episodeNumber;
                   }),
                   seasonNumber: seasonFromFolder,
@@ -327,7 +335,7 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
                   // Sort by season first, then episode
                   const seasonA = a.seasonNumber ?? 0;
                   const seasonB = b.seasonNumber ?? 0;
-                  if (seasonA !== seasonB) return seasonA - seasonB;
+                  if (seasonA !== seasonB && typeof(seasonA) === 'number' && typeof(seasonB) === 'number') return seasonA - seasonB;
                   return a.episodeNumber - b.episodeNumber;
                 }),
                 seasonNumber: seasonFromFolder,

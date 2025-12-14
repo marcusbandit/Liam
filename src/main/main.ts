@@ -395,35 +395,36 @@ ipcMain.handle('scan-and-fetch-metadata', async (_event, folderPath: string) => 
       let fetchedMetadata = null;
       
       try {
-        fetchedMetadata = await anilistHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
+        fetchedMetadata = await malHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
         if (fetchedMetadata) {
-          fetchedMetadata = { ...fetchedMetadata, source: 'anilist' };
+          fetchedMetadata = { ...fetchedMetadata, source: 'mal' };
         }
       } catch (err) {
-        console.log(`  AniList failed for ${media.name}${seasonInfo}`);
+        console.log(`  MAL failed for ${media.name}${seasonInfo}`);
       }
       
-      if (!fetchedMetadata) {
-        try {
-          fetchedMetadata = await malHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
-          if (fetchedMetadata) {
-            fetchedMetadata = { ...fetchedMetadata, source: 'mal' };
-          }
-        } catch (err) {
-          console.log(`  MAL failed for ${media.name}${seasonInfo}`);
-        }
-      }
       
-      if (!fetchedMetadata) {
-        try {
-          fetchedMetadata = await tvdbHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
-          if (fetchedMetadata) {
-            fetchedMetadata = { ...fetchedMetadata, source: 'tvdb' };
-          }
-        } catch (err) {
-          console.log(`  TVDB failed for ${media.name}${seasonInfo}`);
-        }
-      }
+      // if (!fetchedMetadata) {
+      //   try {
+      //     fetchedMetadata = await anilistHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
+      //     if (fetchedMetadata) {
+      //       fetchedMetadata = { ...fetchedMetadata, source: 'anilist' };
+      //     }
+      //   } catch (err) {
+      //     console.log(`  AniList failed for ${media.name}${seasonInfo}`);
+      //   }
+      // }
+      
+      // if (!fetchedMetadata) {
+      //   try {
+      //     fetchedMetadata = await tvdbHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
+      //     if (fetchedMetadata) {
+      //       fetchedMetadata = { ...fetchedMetadata, source: 'tvdb' };
+      //     }
+      //   } catch (err) {
+      //     console.log(`  TVDB failed for ${media.name}${seasonInfo}`);
+      //   }
+      // }
       
       if (fetchedMetadata) {
         // Cache images locally
