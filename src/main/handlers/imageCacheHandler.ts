@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, access, readdir, rm, stat } from 'fs/promis
 import { join, extname } from 'path';
 import { app } from 'electron';
 import { createHash } from 'crypto';
+import { initProgress, updateProgress } from '../utils/debugUtils';
 
 interface CacheEntry {
   originalUrl: string;
@@ -59,7 +60,7 @@ async function saveCacheIndex(index: CacheIndex): Promise<void> {
 function generateCacheFilename(url: string): string {
   // Create a hash of the URL for unique filename
   const hash = createHash('md5').update(url).digest('hex');
-  
+
   // Try to extract extension from URL
   let ext = '.jpg'; // default
   try {
@@ -71,7 +72,7 @@ function generateCacheFilename(url: string): string {
   } catch {
     // Use default extension
   }
-  
+
   return `${hash}${ext}`;
 }
 
@@ -91,21 +92,23 @@ const imageCacheHandler = {
    */
   async cacheImage(imageUrl: string): Promise<string | null> {
     if (!imageUrl) return null;
-    
+
     try {
       await ensureCacheDirectory();
       const cacheIndex = await loadCacheIndex();
-      
+
       // Check if already cached
       if (cacheIndex[imageUrl]) {
         const localPath = cacheIndex[imageUrl].localPath;
         if (await fileExists(localPath)) {
+          const filename = generateCacheFilename(imageUrl);
+          updateProgress('📷 Image caching', filename);
           return localPath;
         }
         // File doesn't exist anymore, remove from index
         delete cacheIndex[imageUrl];
       }
-      
+
       // Download the image
       const response = await fetch(imageUrl, {
         headers: {
@@ -113,19 +116,19 @@ const imageCacheHandler = {
           'Accept': 'image/*',
         },
       });
-      
+
       if (!response.ok) {
         console.error(`Failed to download image: ${imageUrl} (${response.status})`);
         return null;
       }
-      
+
       const filename = generateCacheFilename(imageUrl);
       const localPath = join(getImageCachePath(), filename);
-      
+
       // Get the image as a buffer and write to file
       const arrayBuffer = await response.arrayBuffer();
       await writeFile(localPath, Buffer.from(arrayBuffer));
-      
+
       // Update cache index
       cacheIndex[imageUrl] = {
         originalUrl: imageUrl,
@@ -133,8 +136,8 @@ const imageCacheHandler = {
         cachedAt: new Date().toISOString(),
       };
       await saveCacheIndex(cacheIndex);
-      
-      console.log(`  📷 Cached: ${filename}`);
+
+      updateProgress('📷 Image caching', filename);
       return localPath;
     } catch (error) {
       console.error(`Error caching image ${imageUrl}:`, error);
@@ -148,7 +151,10 @@ const imageCacheHandler = {
   async cacheImages(urls: (string | null | undefined)[]): Promise<Map<string, string | null>> {
     const results = new Map<string, string | null>();
     const validUrls = urls.filter((url): url is string => !!url);
-    
+    if (validUrls.length > 0) {
+      initProgress('📷 Image caching', validUrls.length);
+    }
+
     // Process in batches of 5 to avoid overwhelming the network
     const batchSize = 5;
     for (let i = 0; i < validUrls.length; i += batchSize) {
@@ -159,17 +165,17 @@ const imageCacheHandler = {
           return { url, localPath };
         })
       );
-      
+
       for (const { url, localPath } of batchResults) {
         results.set(url, localPath);
       }
-      
+
       // Small delay between batches
       if (i + batchSize < validUrls.length) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
     }
-    
+
     return results;
   },
 
@@ -179,15 +185,15 @@ const imageCacheHandler = {
    */
   async getCachedPath(imageUrl: string): Promise<string | null> {
     if (!imageUrl) return null;
-    
+
     try {
       const cacheIndex = await loadCacheIndex();
       const entry = cacheIndex[imageUrl];
-      
+
       if (entry && await fileExists(entry.localPath)) {
         return entry.localPath;
       }
-      
+
       return null;
     } catch (error) {
       console.error('Error getting cached path:', error);
@@ -208,17 +214,17 @@ const imageCacheHandler = {
    */
   async getLocalUrl(imageUrl: string | null | undefined): Promise<string | null> {
     if (!imageUrl) return null;
-    
+
     // Check if already a local path
     if (imageUrl.startsWith('/') || imageUrl.startsWith('media://')) {
       return imageUrl;
     }
-    
+
     const localPath = await this.cacheImage(imageUrl);
     if (localPath) {
       return `media://${encodeURIComponent(localPath)}`;
     }
-    
+
     // Fallback to original URL if caching fails
     return imageUrl;
   },
@@ -246,13 +252,13 @@ const imageCacheHandler = {
     try {
       const cachePath = getImageCachePath();
       const files = await readdir(cachePath);
-      
+
       let totalSize = 0;
       let count = 0;
-      
+
       for (const file of files) {
         if (file === 'cache-index.json') continue;
-        
+
         try {
           const filePath = join(cachePath, file);
           const stats = await stat(filePath);
@@ -262,7 +268,7 @@ const imageCacheHandler = {
           // Skip files that can't be accessed
         }
       }
-      
+
       return { count, sizeBytes: totalSize };
     } catch {
       return { count: 0, sizeBytes: 0 };
@@ -334,7 +340,7 @@ const imageCacheHandler = {
 
       for (const localPath of localPaths) {
         if (!localPath) continue;
-        
+
         // Extract actual file path from media:// URL if needed
         const actualPath = localPath.startsWith('media://')
           ? decodeURIComponent(localPath.replace('media://', ''))

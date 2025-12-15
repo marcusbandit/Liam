@@ -22,6 +22,7 @@ export interface ScannedMedia {
   folderPath: string;
   files: VideoFile[];
   seasonNumber: number | null;  // Season number extracted from folder name
+  partNumber: number | null;    // Part number extracted from folder name
 }
 
 function isVideoFile(filename: string): boolean {
@@ -53,6 +54,18 @@ function extractSeasonAndEpisode(filename: string): { season: number | null; epi
   // This will be handled separately when processing folders
 
   // Try various patterns to extract episode number
+  const decimalEpisodeMatch = baseName.match(/Episode\s*(\d+)\.(\d+)/i);
+  if (decimalEpisodeMatch) {
+    const whole = parseInt(decimalEpisodeMatch[1], 10);
+    const decimal = parseInt(decimalEpisodeMatch[2], 10);
+    // Store as actual decimal: 6.5, 7.5, 10.5, etc.
+    // This allows proper sorting (6, 6.5, 7, 7.5) and correct display
+    return {
+      season: null,
+      episode: whole + decimal / 10,
+    };
+  }
+
   const patterns = [
     /Episode\s*(\d+)/i,           // "Episode 10" or "Episode10"
     /Ep\.?\s*(\d+)/i,             // "Ep 10" or "Ep.10"
@@ -113,6 +126,24 @@ function extractSeasonNumber(folderName: string): number | null {
   return null;
 }
 
+function extractPartNumber(folderName: string): number | null {
+  // Try various patterns to extract part number from folder name
+  const patterns = [
+    /Part\s*(\d+)/i,             // "Part 1" or "Part1"
+    /\bP(\d+)\b/i,               // "P1" or "P01"
+  ];
+
+  for (const pattern of patterns) {
+    const match = folderName.match(pattern);
+    if (match) {
+      return parseInt(match[1], 10);
+    }
+  }
+
+  // No part pattern found - return null
+  return null;
+}
+
 function extractSeriesNameFromFilenames(videoFiles: VideoFile[]): string {
   if (videoFiles.length === 0) {
     return '';
@@ -124,19 +155,22 @@ function extractSeriesNameFromFilenames(videoFiles: VideoFile[]): string {
 
     // Remove common patterns that indicate episode/season numbers
     let cleaned = baseName
-      .replace(/\s*\bS\d+E\d+\b.*$/i, '')                     // Remove S01E01, S1E1 patterns (keep everything before)
-      .replace(/\s*Episode\s*\d+.*$/i, '')                    // Remove Episode XX, Ep XX patterns
-      .replace(/\s*Ep\.?\s*\d+.*$/i, '')                      // Remove [XX] episode number patterns
-      .replace(/\s*\[\d+\].*$/, '')                           // Remove - XX patterns (episode numbers after dash, but be careful with "86 - 01")
-      .replace(/\s*-\s*\d{1,4}(?:\s|$).*$/, '')               // Remove standalone episode numbers at the end (1-4 digits, but not years)
-      .replace(/\s+\d{1,3}(?!\d)(?:\s|$)/g, '')               // Remove standalone numbers (1-3 digits) that aren't part of larger numbers
-      .replace(/\s*\[(?:1080|720|480|360)p?\]\s*/gi, ' ')     // Remove quality/resolution tags [1080p], [720p], etc (but keep if it's part of the name)
-      .replace(/\s*\[(?:HD|SD|FHD|UHD)\]?\s*/gi, ' ')         // Remove quality/resolution tags [HD], [SD], etc (but keep if it's part of the name)
-      .replace(/\s*\(\d{4}\)\s*$/, '')                        // Remove year tags (2020), (2021), etc at the end
-      .replace(/\s*\([^)]*\)\s*/g, ' ')                       // Remove other parentheses content
-      .replace(/\./g, ' ')                                    // Replace dots with spaces (but preserve structure)
-      .replace(/_/g, ' ')                                     // Replace underscores with spaces (but preserve structure)
-      .replace(/\s+/g, ' ')                                   // Normalize whitespace
+      .replace(/\s*\bS\d+E\d+(\.\d+)?\b.*$/i, '')                 // Remove S01E01, S1E1, S01E10.5, etc.
+      .replace(/\s*\bE\d+(\.\d+)?\b.*$/i, '')                     // Remove E01, E1, E10.5 patterns (keep everything before)
+      .replace(/\s*\bPart\s*\d+\b.*$/i, '')                       // Remove 'Part 1', 'Part 2', etc.
+      .replace(/\s*\bSeason\s*\d+\b.*$/i, '')                     // Remove 'Season 1', 'Season 2', etc. NOT removing 'season' only if it has a number after it.
+      .replace(/\s*Episode\s*\d+(\.\d+)?[ab]?\s*.*$/i, '')        // Remove 'Episode 10', 'Episode 10.5', 'Episode 12a', etc.
+      .replace(/\s*Ep\.?\s*\d+(\.\d+)?[ab]?\s*.*$/i, '')          // Remove 'Ep 12', 'Ep. 10.5', etc.
+      .replace(/\s*\[\d+(\.\d+)?[ab]?\].*$/, '')                  // Remove [10], [10.5], [12a] episode number patterns
+      .replace(/\s*-\s*\d{1,4}(?:\.\d+)?[ab]?(?:\s|$).*$/, '')    // Remove episode at end like '- 01', '- 10.5', '- 12a' but not years
+      .replace(/\s+\d{1,3}(?!\d)(?:\s|$)/g, '')                   // Remove standalone numbers (1-3 digits) unless part of larger numbers
+      .replace(/\s*\[(?:1080|720|480|360)p?\]\s*/gi, ' ')         // Remove quality/resolution tags [1080p] etc
+      .replace(/\s*\[(?:HD|SD|FHD|UHD)\]?\s*/gi, ' ')             // Remove other quality tags [HD] etc
+      .replace(/\s*\(\d{4}\)\s*$/, '')                            // Remove trailing years (2020), (2021), etc
+      .replace(/\s*\([^)]*\)\s*/g, ' ')                           // Remove other parentheses content
+      .replace(/\./g, ' ')                                        // Replace dots with spaces
+      .replace(/_/g, ' ')                                         // Replace underscores with spaces
+      .replace(/\s+/g, ' ')                                       // Normalize whitespace
       .trim();
 
     return cleaned;
@@ -170,14 +204,15 @@ function extractSeriesNameFromFilenames(videoFiles: VideoFile[]): string {
   // If common prefix is too short or empty, try finding common words
   if (result.length < 3) {
     // Extract first few words that appear in all filenames
-    const firstFileWords = cleanedNames[0].split(/\s+/).filter(w => w.length > 0 && !/^\d+$/.test(w));
+    // Don't filter out numeric words - they might be part of the series name (e.g., "86" aka top 10 anime of all time. fight me.)
+    const firstFileWords = cleanedNames[0].split(/\s+/).filter(w => w.length > 0);
     const commonWords: string[] = [];
 
     for (let i = 0; i < firstFileWords.length; i++) {
       const word = firstFileWords[i];
 
       if (cleanedNames.every(name => {
-        const words = name.split(/\s+/).filter(w => w.length > 0 && !/^\d+$/.test(w));
+        const words = name.split(/\s+/).filter(w => w.length > 0);
         // Check if word exists at position i before comparing
         return i < words.length && words[i] === word;
       })) {
@@ -201,7 +236,36 @@ function extractSeriesNameFromFilenames(videoFiles: VideoFile[]): string {
     .replace(/\s+\d+\s*$/, '')
     .trim();
 
+  if (result.length <= 3 && /^\d+$/.test(result)) {
+    return result;
+  }
+
   return result;
+}
+
+function generateSeriesId(seriesName: string, folderName: string, seasonNumber: number | null, partNumber: number | null): string {
+  let baseId: string;
+  
+  if (seriesName && seriesName.length >= 2) {
+    baseId = seriesName
+      .replace(/[^a-zA-Z0-9\s]/g, '')
+      .replace(/\s+/g, '_')
+      .toLowerCase()
+      .substring(0, 50);
+  } else {
+    // Fallback to folder name if series name is too short or empty
+    baseId = folderName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+  }
+  
+  if (partNumber !== null) {
+    return `${baseId}_part${partNumber.toString().padStart(2, '0')}`;
+  }
+  
+  if (seasonNumber !== null) {
+    return `${baseId}_s${seasonNumber.toString().padStart(2, '0')}`;
+  }
+  
+  return baseId;
 }
 
 function cleanMovieTitle(filename: string): string {
@@ -272,11 +336,24 @@ async function scanFolderForVideos(folderPath: string, folderSeason: number | nu
         video.subtitlePaths = matchingSubs;
       }
     }
+
+    // Deduplicate videos by file path (in case of duplicate entries)
+    const seenPaths = new Set<string>();
+    const uniqueVideos = videos.filter(video => {
+      if (seenPaths.has(video.filePath)) {
+        console.warn(`Duplicate video file detected: ${video.filePath}`);
+        return false;
+      }
+      seenPaths.add(video.filePath);
+      return true;
+    });
+
+    return { videos: uniqueVideos, subtitles };
   } catch (error) {
     console.error(`Error scanning folder ${folderPath}:`, error);
   }
 
-  return { videos, subtitles };
+  return { videos: [], subtitles };
 }
 
 async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
@@ -320,17 +397,16 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
             for (const subDir of subDirs) {
               const seriesPath = join(entryPath, subDir);
               const seasonFromFolder = extractSeasonNumber(subDir);
+              const partFromFolder = extractPartNumber(subDir);
               const { videos } = await scanFolderForVideos(seriesPath, seasonFromFolder);
 
               if (videos.length > 0) {
                 const seriesName = extractSeriesNameFromFilenames(videos);
-                // Include season in seriesId to distinguish seasons
-                const baseId = subDir.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-                const seriesId = seasonFromFolder
-                  ? `${baseId}_s${seasonFromFolder.toString().padStart(2, '0')}`
-                  : baseId;
+                const seriesId = generateSeriesId(seriesName, subDir, seasonFromFolder, partFromFolder);
 
-                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesName}"`);
+                const partInfo = partFromFolder ? `, Part ${partFromFolder}` : '';
+                const seasonInfo = seasonFromFolder ? `, Season ${seasonFromFolder}` : '';
+                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonInfo}${partInfo}) → search: "${seriesName}" → ID: "${seriesId}"`);
 
                 results.push({
                   id: seriesId,
@@ -345,6 +421,7 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
                     return a.episodeNumber - b.episodeNumber;
                   }),
                   seasonNumber: seasonFromFolder,
+                  partNumber: partFromFolder,
                 });
               }
             }
@@ -366,35 +443,37 @@ async function scanDirectory(rootPath: string): Promise<ScannedMedia[]> {
                   folderPath: entryPath,
                   files: [video],
                   seasonNumber: null,
+                  partNumber: null,
                 });
               }
             }
           } else if (subVideos.length > 0) {
-// This folder directly contains videos - treat as series (folder name is series name)
-// Don't assume single video = movie - user may just have 1 episode downloaded
-const seriesName = extractSeriesNameFromFilenames(subVideos);
-const seasonFromFolder = extractSeasonNumber(entry);
-const baseId = entry.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-const seriesId = seasonFromFolder
-  ? `${baseId}_s${seasonFromFolder.toString().padStart(2, '0')}`
-  : baseId;
+            // This folder directly contains videos - treat as series (folder name is series name)
+            // Don't assume single video = movie - user may just have 1 episode downloaded
+            const seriesName = extractSeriesNameFromFilenames(subVideos);
+            const seasonFromFolder = extractSeasonNumber(entry);
+            const partFromFolder = extractPartNumber(entry);
+            const seriesId = generateSeriesId(seriesName, entry, seasonFromFolder, partFromFolder);
 
-console.log(`  📺 Series: ${entry} (${subVideos.length} episode${subVideos.length > 1 ? 's' : ''}${seasonFromFolder ? `, Season ${seasonFromFolder}` : ''}) → search: "${seriesName}"`);
+            const partInfo = partFromFolder ? `, Part ${partFromFolder}` : '';
+            const seasonInfo = seasonFromFolder ? `, Season ${seasonFromFolder}` : '';
+            console.log(`  📺 Series: ${entry} (${subVideos.length} episode${subVideos.length > 1 ? 's' : ''}${seasonInfo}${partInfo}) → search: "${seriesName}" → ID: "${seriesId}"`);
 
-results.push({
-  id: seriesId,
-  name: seriesName,
-  type: 'series',
-  folderPath: entryPath,
-  files: subVideos.sort((a, b) => {
-    // Sort by season first, then episode
-    const seasonA = a.seasonNumber ?? 0;
-    const seasonB = b.seasonNumber ?? 0;
-    if (seasonA !== seasonB) return seasonA - seasonB;
-    return a.episodeNumber - b.episodeNumber;
-  }),
-  seasonNumber: seasonFromFolder,
-});
+            results.push({
+              id: seriesId,
+              name: seriesName,
+              type: 'series',
+              folderPath: entryPath,
+              files: subVideos.sort((a, b) => {
+                // Sort by season first, then episode
+                const seasonA = a.seasonNumber ?? 0;
+                const seasonB = b.seasonNumber ?? 0;
+                if (seasonA !== seasonB) return seasonA - seasonB;
+                return a.episodeNumber - b.episodeNumber;
+              }),
+              seasonNumber: seasonFromFolder,
+              partNumber: partFromFolder,
+            });
           }
         } else if (stats.isFile() && isVideoFile(entry)) {
           // Video file directly in root - treat as standalone movie
@@ -420,6 +499,7 @@ results.push({
               parentFolder: basename(rootPath),
             }],
             seasonNumber: null,
+            partNumber: null,
           });
         }
       } catch (err) {

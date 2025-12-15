@@ -1,6 +1,24 @@
 import axios from 'axios';
 
 const JIKAN_API_URL = 'https://api.jikan.moe/v4';
+const MAL_SEARCH_LIMIT = 10;
+
+// ANSI color codes for terminal output
+const colors = {
+  yellow: '\x1b[33m',
+  reset: '\x1b[0m',
+};
+
+function isRateLimitError(error: unknown): boolean {
+  if (axios.isAxiosError(error)) {
+    return error.response?.status === 429;
+  }
+  return false;
+}
+
+function logRateLimitWarning(source: string): void {
+  console.log(`${colors.yellow}  ⚠️  Rate limited by ${source}. Please wait before trying again.${colors.reset}`);
+}
 
 interface JikanAnime {
   mal_id: number;
@@ -69,24 +87,50 @@ export interface EpisodeMetadata {
   thumbnail: string | null;
 }
 
-const malHandler = {
-  async searchAnime(searchTerm: string): Promise<JikanAnime | null> {
-    try {
-      const response = await axios.get<{ data: JikanAnime[] }>(`${JIKAN_API_URL}/anime`, {
-        params: {
-          q: searchTerm,
-          limit: 1,
-        },
-      });
+function isReleased(anime: JikanAnime): boolean {
+  // Skip anime that haven't been released yet
+  // Status values like "Not yet aired", "Not yet released" should be skipped
+  const status = anime.status?.toLowerCase() || '';
+  if (status.includes('not yet') || status.includes('not aired')) {
+    return false;
+  }
+  // Allow: "Currently Airing", "Finished Airing", "On Hold", etc.
+  return true;
+}
 
-      if (response.data?.data?.[0]) {
-        return response.data.data[0];
+const malHandler = {
+  async searchAnime(searchTerm: string, limit: number = MAL_SEARCH_LIMIT): Promise<JikanAnime[]> {
+    let retries = 0;
+    const maxRetries = 3;
+    
+    while (retries <= maxRetries) {
+      try {
+        const response = await axios.get<{ data: JikanAnime[] }>(`${JIKAN_API_URL}/anime`, {
+          params: {
+            q: searchTerm,
+            limit: limit,
+          },
+        });
+
+        return response.data?.data || [];
+      } catch (error) {
+        if (isRateLimitError(error) && retries < maxRetries) {
+          retries++;
+          const delaySeconds = retries * 1; // 2, 4, 6 seconds
+          console.log(`  \x1b[33m⏳ Rate limited while searching MAL. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1b[0m`);
+          await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+        } else {
+          if (isRateLimitError(error)) {
+            logRateLimitWarning('MAL');
+          } else {
+            console.error('Error searching MyAnimeList:', error);
+          }
+          throw error;
+        }
       }
-      return null;
-    } catch (error) {
-      console.error('Error searching MyAnimeList:', error);
-      throw error;
     }
+    
+    return [];
   },
 
   async getEpisodes(animeId: number, totalEpisodes: number | null, seasonNumber?: number | null): Promise<EpisodeMetadata[]> {
@@ -94,11 +138,12 @@ const malHandler = {
       const response = await axios.get<{ data: JikanEpisode[] }>(`${JIKAN_API_URL}/anime/${animeId}/episodes`);
       
       // Create a map of fetched episodes
+      // Use episode number, not mal_id (mal_id is the database ID, not episode number)
       const fetchedEpisodeMap = new Map<number, JikanEpisode>();
       if (response.data?.data) {
         for (const ep of response.data.data) {
-          const epNum = ep.mal_id || ep.episode;
-          if (epNum) {
+          const epNum = ep.episode; // Use episode number, not mal_id
+          if (epNum && epNum > 0) {
             fetchedEpisodeMap.set(epNum, ep);
           }
         }
@@ -122,6 +167,10 @@ const malHandler = {
       
       return episodes;
     } catch (error) {
+      if (isRateLimitError(error)) {
+        logRateLimitWarning('MAL');
+        throw error;
+      }
       console.error('Error fetching MAL episodes:', error);
       // If fetching fails but we know totalEpisodes, generate basic entries
       if (totalEpisodes) {
@@ -138,33 +187,163 @@ const malHandler = {
     }
   },
 
-  async searchAndFetchMetadata(seriesName: string, seasonNumber?: number | null): Promise<SeriesMetadata | null> {
+  async searchAndFetchMetadata(seriesName: string, seasonNumber?: number | null, partNumber?: number | null, folderEpisodeCount?: number): Promise<SeriesMetadata | null> {
     try {
-      // Include season in search query if available
-      const searchQuery = seasonNumber 
-        ? `${seriesName} Season ${seasonNumber}`
-        : seriesName;
+      // Special handling for numeric-only series names like "86"
+      // Try variations: "86" -> "86", "eighty six", "86 anime"
+      const searchVariations: string[] = [seriesName];
+      if (/^\d+$/.test(seriesName.trim())) {
+        // It's a numeric-only name, add variations
+        const num = parseInt(seriesName.trim(), 10);
+        if (num === 86) {
+          searchVariations.push('eighty six', '86 anime', '86 -eighty six-');
+        }
+      }
       
-      const anime = await this.searchAnime(searchQuery);
+      // Only include season/part in search query if > 1 (don't search for "Season 1" or "Part 1")
+      // Prioritize part number over season number for search
+      let searchQuery = seriesName;
+      if (partNumber !== null && partNumber !== undefined && partNumber > 1) {
+        searchQuery = `${seriesName} Part ${partNumber}`;
+      } else if (seasonNumber !== null && seasonNumber !== undefined && seasonNumber > 1) {
+        searchQuery = `${seriesName} Season ${seasonNumber}`;
+      }
       
-      if (!anime) {
-        // If season-specific search failed, try without season
-        if (seasonNumber) {
-          const animeWithoutSeason = await this.searchAnime(seriesName);
-          if (animeWithoutSeason) {
-            // Found the series, but we'll need to filter episodes by season
-            // For now, return it and let the UI handle season filtering
-            const episodes = await this.getEpisodes(animeWithoutSeason.mal_id, animeWithoutSeason.episodes, seasonNumber);
-            return this.formatMetadata(animeWithoutSeason, episodes, seasonNumber);
+      // Search for multiple results (up to 10) to find one with enough episodes
+      let searchResults = await this.searchAnime(searchQuery, MAL_SEARCH_LIMIT);
+      console.log(`MAL search: "${searchQuery}" => ${searchResults.length} result(s).`);
+
+      // If no results and we have variations, try them
+      if (searchResults.length === 0 && searchVariations.length > 1) {
+        for (const variation of searchVariations.slice(1)) {
+          // Only include part/season if > 1
+          let variationQuery = variation;
+          if (partNumber !== null && partNumber !== undefined && partNumber > 1) {
+            variationQuery = `${variation} Part ${partNumber}`;
+          } else if (seasonNumber !== null && seasonNumber !== undefined && seasonNumber > 1) {
+            variationQuery = `${variation} Season ${seasonNumber}`;
+          }
+          searchResults = await this.searchAnime(variationQuery, MAL_SEARCH_LIMIT);
+          console.log(`MAL search (variation): "${variationQuery}" => ${searchResults.length} result(s).`);
+          if (searchResults.length > 0) {
+            searchQuery = variationQuery;
+            break;
           }
         }
+      }
+
+      if (searchResults.length === 0 && ((partNumber && partNumber > 1) || (seasonNumber && seasonNumber > 1))) {
+        const resultsWithoutSeason = await this.searchAnime(seriesName, MAL_SEARCH_LIMIT);
+        console.log(`MAL search (no season): "${seriesName}" => ${resultsWithoutSeason.length} result(s).`);
+
+        if (resultsWithoutSeason.length > 0) {
+          let foundValidResult = false;
+          for (const anime of resultsWithoutSeason) {
+            if (
+              !isReleased(anime) ||
+              (folderEpisodeCount !== undefined && (
+                anime.episodes === null ||
+                anime.episodes < folderEpisodeCount
+              ))
+            ) continue;
+
+            foundValidResult = true;
+            const episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+            console.log(`MAL accepted: "${anime.title}"`);
+            return this.formatMetadata(anime, episodes, seasonNumber);
+          }
+
+          // Fallback: accept result with unknown episode count if needed
+          if (!foundValidResult && folderEpisodeCount !== undefined) {
+            for (const anime of resultsWithoutSeason) {
+              if (anime.episodes === null) {
+                const episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+                console.log(`MAL fallback accepted: "${anime.title}" (unknown episode count)`);
+                return this.formatMetadata(anime, episodes, seasonNumber);
+              }
+            }
+          }
+        }
+        console.log(`MAL: No suitable results found for "${searchQuery}" or "${seriesName}".`);
         return null;
       }
 
-      const episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+      // Try each result until we find one with enough episodes
+      let foundValidResult = false;
+      for (let i = 0; i < searchResults.length; i++) {
+        const anime = searchResults[i];
+        console.log(`  [${i + 1}/${searchResults.length}] Checking "\x1b[36m${anime.title}\x1b[0m" - episodes: ${anime.episodes ?? 'unknown'}, status: ${anime.status}`);
 
-      return this.formatMetadata(anime, episodes, seasonNumber);
+        // Skip if not yet released or doesn't have required episodes
+        if (!isReleased(anime)) continue;
+        if (folderEpisodeCount !== undefined) {
+          if (anime.episodes === null || anime.episodes < folderEpisodeCount) continue;
+        }
+
+        console.log(`  \x1b[32m✓\x1b[0m Accepting "${anime.title}" - has ${anime.episodes} episodes, folder has ${folderEpisodeCount ?? 'unknown'}`);
+        foundValidResult = true;
+        
+        // Retry with delay if we get rate limited after confirming a match
+        let episodes: EpisodeMetadata[];
+        let retries = 0;
+        const maxRetries = 3;
+        while (retries <= maxRetries) {
+          try {
+            episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+            break;
+          } catch (error) {
+            if (isRateLimitError(error) && retries < maxRetries) {
+              retries++;
+              const delaySeconds = retries * 1; // 2, 4, 6 seconds
+              console.log(`  \x1b[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1b[0m`);
+              await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+            } else {
+              throw error;
+            }
+          }
+        }
+        
+        return this.formatMetadata(anime, episodes!, seasonNumber);
+      }
+
+      // If we have folder episode count but no valid result, try accepting null results as fallback
+      if (!foundValidResult && folderEpisodeCount !== undefined) {
+        for (let i = 0; i < searchResults.length; i++) {
+          const anime = searchResults[i];
+          if (anime.episodes === null) {
+            console.log(`  \x1b[33m⚠️\x1b[0m  Fallback: Accepting "${anime.title}" with unknown episode count`);
+            
+            // Retry with delay if we get rate limited
+            let episodes: EpisodeMetadata[];
+            let retries = 0;
+            const maxRetries = 3;
+            while (retries <= maxRetries) {
+              try {
+                episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+                break;
+              } catch (error) {
+                if (isRateLimitError(error) && retries < maxRetries) {
+                  retries++;
+                  const delaySeconds = retries * 1;
+                  console.log(`  \x1b[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1b[0m`);
+                  await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                } else {
+                  throw error;
+                }
+              }
+            }
+            
+            return this.formatMetadata(anime, episodes!, seasonNumber);
+          }
+        }
+        console.log(`  \x1b[33m⚠️\x1b[0m  No results with enough episodes found, or only found series with unknown episode counts.`);
+      }
+
+      return null;
     } catch (error) {
+      if (isRateLimitError(error)) {
+        return null;
+      }
       console.error('Error fetching MAL metadata:', error);
       return null;
     }

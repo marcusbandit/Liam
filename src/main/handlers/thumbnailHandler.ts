@@ -1,8 +1,9 @@
 import { mkdir, access } from 'fs/promises';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { app } from 'electron';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
+import { initProgress, updateProgress } from '../utils/debugUtils';
 
 function getThumbnailCachePath(): string {
   const userDataPath = app.getPath('userData');
@@ -40,14 +41,20 @@ function generateThumbnailFilename(videoPath: string, timestamp: number): string
  * @param timestamp Timestamp in seconds (default: 120 = 2 minutes)
  * @returns Path to the generated thumbnail or null if failed
  */
-async function extractFrame(videoPath: string, timestamp: number = 120): Promise<string | null> {
+async function extractFrame(videoPath: string, timestamp: number = 120, resetProgress: boolean = false): Promise<string | null> {
   await ensureThumbnailDirectory();
   
   const thumbnailFilename = generateThumbnailFilename(videoPath, timestamp);
   const thumbnailPath = join(getThumbnailCachePath(), thumbnailFilename);
   
+  if (resetProgress) {
+    initProgress('🎬 Generating thumbnails', 0);
+  }
+  
   // Check if thumbnail already exists
   if (await fileExists(thumbnailPath)) {
+    const filename = basename(videoPath);
+    updateProgress('🎬 Generating thumbnails', filename);
     return thumbnailPath;
   }
   
@@ -72,15 +79,18 @@ async function extractFrame(videoPath: string, timestamp: number = 120): Promise
 
     ffmpeg.on('close', async (code) => {
       if (code === 0 && await fileExists(thumbnailPath)) {
-        console.log(`  🎬 Generated thumbnail: ${thumbnailFilename}`);
+        const filename = basename(videoPath);
+        updateProgress('🎬 Generating thumbnails', filename);
         resolve(thumbnailPath);
       } else {
         // If seeking to 2 min fails (video too short), try 10 seconds
         if (timestamp > 10) {
-          const retryResult = await extractFrame(videoPath, 10);
+          const retryResult = await extractFrame(videoPath, 10, false);
           resolve(retryResult);
         } else {
-          console.log(`  ⚠️ Failed to generate thumbnail for: ${videoPath}`);
+          // Still update progress even on failure
+          const filename = basename(videoPath);
+          updateProgress('🎬 Generating thumbnails', filename);
           resolve(null);
         }
       }
@@ -104,12 +114,13 @@ const thumbnailHandler = {
    * Generate a thumbnail for an episode from the video file
    * @param videoPath Path to the video file
    * @param timestamp Timestamp in seconds (default: 120 = 2 minutes)
+   * @param resetProgressBar Reset the progress bar (use true for first thumbnail in a batch)
    */
-  async generateThumbnail(videoPath: string, timestamp: number = 120): Promise<string | null> {
+  async generateThumbnail(videoPath: string, timestamp: number = 120, resetProgressBar: boolean = true): Promise<string | null> {
     if (!videoPath) return null;
     
     try {
-      return await extractFrame(videoPath, timestamp);
+      return await extractFrame(videoPath, timestamp, resetProgressBar);
     } catch (error) {
       console.error(`Error generating thumbnail for ${videoPath}:`, error);
       return null;
@@ -123,6 +134,7 @@ const thumbnailHandler = {
   async generateThumbnails(videoPaths: string[]): Promise<Map<string, string | null>> {
     const results = new Map<string, string | null>();
     
+    // Progress bar will be initialized by caller if needed
     for (const videoPath of videoPaths) {
       const thumbnail = await this.generateThumbnail(videoPath);
       results.set(videoPath, thumbnail);

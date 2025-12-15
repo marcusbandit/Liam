@@ -10,6 +10,16 @@ function getImageUrl(localPath?: string | null, remotePath?: string | null): str
   return remotePath || null;
 }
 
+// Helper to format episode numbers (handles decimal episodes: 6.5 -> "6.5", 7.5 -> "7.5")
+function formatEpisodeNumber(episodeNumber: number): string {
+  // If episode number is not an integer, it's a decimal episode (6.5, 7.5, 10.5, etc.)
+  if (!Number.isInteger(episodeNumber)) {
+    // Format to show one decimal place
+    return episodeNumber.toFixed(1);
+  }
+  return episodeNumber.toString();
+}
+
 interface EpisodeCardProps {
   seriesId: string;
   episode: EpisodeMetadata;
@@ -66,8 +76,8 @@ function EpisodeCard({ seriesId, episode, hasFile }: EpisodeCardProps) {
         <div className="episode-info">
           <div className="episode-number">
             {episode.seasonNumber !== null && episode.seasonNumber !== undefined
-              ? `S${episode.seasonNumber.toString().padStart(2, "0")}E${episode.episodeNumber.toString().padStart(2, "0")}`
-              : `Episode ${episode.episodeNumber}`}
+              ? `S${episode.seasonNumber.toString().padStart(2, "0")}E${formatEpisodeNumber(episode.episodeNumber)}`
+              : `Episode ${formatEpisodeNumber(episode.episodeNumber)}`}
           </div>
           <div className="episode-title">{episode.title || `Episode ${episode.episodeNumber}`}</div>
           {episode.airDate && (

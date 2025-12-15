@@ -1,8 +1,18 @@
-import { useParams, useNavigate } from 'react-router-dom';
-import { useMetadata, type EpisodeMetadata, type FileEpisode } from '../hooks/useMetadata';
-import EpisodeCard from '../components/EpisodeCard';
-import { Star, Calendar, Clock, Tv, Film, Play, AlertTriangle, ArrowLeft, Home } from 'lucide-react';
-import { getDisplayRating } from '../utils/ratingUtils';
+import { useParams, useNavigate } from "react-router-dom";
+import { useMetadata, type EpisodeMetadata, type FileEpisode } from "../hooks/useMetadata";
+import EpisodeCard from "../components/EpisodeCard";
+import {
+  Star,
+  Calendar,
+  Clock,
+  Tv,
+  Film,
+  Play,
+  AlertTriangle,
+  ArrowLeft,
+  Home,
+} from "lucide-react";
+import { getDisplayRating } from "../utils/ratingUtils";
 
 // Helper to convert local file path to media:// URL
 function getImageUrl(localPath?: string | null, remotePath?: string | null): string | null {
@@ -30,9 +40,12 @@ function formatDuration(minutes: number | null | undefined, isMovie: boolean): s
 }
 
 // Format season nicely
-function formatSeason(season: string | null | undefined, year: number | null | undefined): string | null {
+function formatSeason(
+  season: string | null | undefined,
+  year: number | null | undefined
+): string | null {
   if (!season && !year) return null;
-  const seasonName = season ? season.charAt(0) + season.slice(1).toLowerCase() : '';
+  const seasonName = season ? season.charAt(0) + season.slice(1).toLowerCase() : "";
   if (seasonName && year) return `${seasonName} ${year}`;
   if (year) return `${year}`;
   return seasonName;
@@ -41,8 +54,18 @@ function formatSeason(season: string | null | undefined, year: number | null | u
 // Get year from startDate
 function getYear(startDate: string | null | undefined): number | null {
   if (!startDate) return null;
-  const year = parseInt(startDate.split('-')[0], 10);
+  const year = parseInt(startDate.split("-")[0], 10);
   return isNaN(year) ? null : year;
+}
+
+// Helper to format episode numbers (handles decimal episodes: 6.5 -> "6.5", 7.5 -> "7.5")
+function formatEpisodeNumber(episodeNumber: number): string {
+  // If episode number is not an integer, it's a decimal episode (6.5, 7.5, 10.5, etc.)
+  if (!Number.isInteger(episodeNumber)) {
+    // Format to show one decimal place
+    return episodeNumber.toFixed(1);
+  }
+  return episodeNumber.toString();
 }
 
 function SeriesDetailPage() {
@@ -58,7 +81,7 @@ function SeriesDetailPage() {
     return (
       <div className="error">
         <p>Series ID not provided.</p>
-        <button className="action-btn action-btn-secondary" onClick={() => navigate('/')}>
+        <button className="action-btn action-btn-secondary" onClick={() => navigate("/")}>
           <Home size={16} /> Go Home
         </button>
       </div>
@@ -71,7 +94,7 @@ function SeriesDetailPage() {
     return (
       <div className="error">
         <p>Series not found.</p>
-        <button className="action-btn action-btn-secondary" onClick={() => navigate('/')}>
+        <button className="action-btn action-btn-secondary" onClick={() => navigate("/")}>
           <Home size={16} /> Go Home
         </button>
       </div>
@@ -80,21 +103,21 @@ function SeriesDetailPage() {
 
   const metadataEpisodes: EpisodeMetadata[] = seriesData.episodes || [];
   const fileEpisodes: FileEpisode[] = seriesData.fileEpisodes || [];
-  
+
   // Determine if this is a movie (single playable item)
-  const isMovie = seriesData.type === 'movie' || 
-                  seriesData.format === 'MOVIE' || 
-                  (fileEpisodes.length === 1 && (seriesData.totalEpisodes === 1 || !seriesData.totalEpisodes));
-  
+  const isMovie =
+    seriesData.type === "movie" ||
+    seriesData.format === "MOVIE" ||
+    (fileEpisodes.length === 1 && (seriesData.totalEpisodes === 1 || !seriesData.totalEpisodes));
+
   // Create a map of file episodes by season and episode number
   const fileEpisodeMap = new Map<string, FileEpisode>();
-  fileEpisodes.forEach(ep => {
-    const key = ep.seasonNumber !== null 
-      ? `S${ep.seasonNumber}E${ep.episodeNumber}`
-      : `E${ep.episodeNumber}`;
+  fileEpisodes.forEach((ep) => {
+    const key =
+      ep.seasonNumber !== null ? `S${ep.seasonNumber}E${ep.episodeNumber}` : `E${ep.episodeNumber}`;
     fileEpisodeMap.set(key, ep);
   });
-  
+
   // Group episodes by season
   type SeasonEpisodes = {
     seasonNumber: number | null;
@@ -105,15 +128,17 @@ function SeriesDetailPage() {
   if (!isMovie) {
     // Determine the season from file episodes (they have the real season info)
     const fileSeasons = new Set<number | null>();
-    fileEpisodes.forEach(ep => fileSeasons.add(ep.seasonNumber ?? null));
-    
+    fileEpisodes.forEach((ep) => fileSeasons.add(ep.seasonNumber ?? null));
+
     // If metadata episodes don't have season info but files do, assign metadata to file seasons
-    const metadataHasSeasons = metadataEpisodes.some(ep => ep.seasonNumber !== null && ep.seasonNumber !== undefined);
+    const metadataHasSeasons = metadataEpisodes.some(
+      (ep) => ep.seasonNumber !== null && ep.seasonNumber !== undefined
+    );
     const defaultSeason = fileSeasons.size === 1 ? Array.from(fileSeasons)[0] : null;
-    
+
     // Group metadata episodes by season
     const metadataBySeason = new Map<number | null, EpisodeMetadata[]>();
-    metadataEpisodes.forEach(ep => {
+    metadataEpisodes.forEach((ep) => {
       // If metadata doesn't have season info but files do, use the file season
       let season = ep.seasonNumber ?? null;
       if (!metadataHasSeasons && defaultSeason !== null) {
@@ -127,43 +152,92 @@ function SeriesDetailPage() {
 
     // Process each season separately - use seasons from both sources
     const allSeasons = new Set<number | null>();
-    metadataEpisodes.forEach(ep => {
+    metadataEpisodes.forEach((ep) => {
       const season = ep.seasonNumber ?? null;
       allSeasons.add(!metadataHasSeasons && defaultSeason !== null ? defaultSeason : season);
     });
-    fileEpisodes.forEach(ep => allSeasons.add(ep.seasonNumber ?? null));
+    fileEpisodes.forEach((ep) => allSeasons.add(ep.seasonNumber ?? null));
 
     for (const season of allSeasons) {
       const seasonMetadata = metadataBySeason.get(season) || [];
-      const seasonFiles = fileEpisodes.filter(ep => (ep.seasonNumber ?? null) === season);
-      
-      // Determine total episode count for this season
-      const seasonTotalEpisodes = Math.max(
-        seasonMetadata.length,
-        ...seasonFiles.map(ep => ep.episodeNumber),
-        0
-      );
+      const seasonFiles = fileEpisodes.filter((ep) => (ep.seasonNumber ?? null) === season);
+
+      const canonicalFileEpisodes = seasonFiles.filter((ep) => Number.isInteger(ep.episodeNumber));
+      const maxCanonicalFileEpisode =
+        canonicalFileEpisodes.length > 0
+          ? Math.max(...canonicalFileEpisodes.map((ep) => ep.episodeNumber))
+          : 0;
+
+      const metadataMaxEpisode =
+        seasonMetadata.length > 0 ? Math.max(...seasonMetadata.map((ep) => ep.episodeNumber)) : 0;
+
+      const metadataTotalEpisodes =
+        (allSeasons.size === 1 || season === defaultSeason) && seriesData.totalEpisodes
+          ? seriesData.totalEpisodes
+          : null;
+
+      const seasonTotalEpisodes =
+        metadataTotalEpisodes && metadataTotalEpisodes > maxCanonicalFileEpisode
+          ? metadataTotalEpisodes
+          : Math.max(metadataMaxEpisode, maxCanonicalFileEpisode);
 
       // Create map for this season
       const seasonMetadataMap = new Map<number, EpisodeMetadata>();
-      seasonMetadata.forEach(ep => seasonMetadataMap.set(ep.episodeNumber, ep));
-      
+      seasonMetadata.forEach((ep) => seasonMetadataMap.set(ep.episodeNumber, ep));
+
       // Create a map of file episodes for this season by episode number
       const seasonFileMap = new Map<number, FileEpisode>();
-      seasonFiles.forEach(ep => seasonFileMap.set(ep.episodeNumber, ep));
+      seasonFiles.forEach((ep) => seasonFileMap.set(ep.episodeNumber, ep));
 
       const seasonEpisodes: (EpisodeMetadata & { hasFile: boolean })[] = [];
 
-      // Generate episodes for this season
+      // Collect all episode numbers (from both metadata and files, including decimals)
+      const allEpisodeNumbers = new Set<number>();
+      seasonMetadata.forEach((ep) => allEpisodeNumbers.add(ep.episodeNumber));
+      seasonFiles.forEach((ep) => allEpisodeNumbers.add(ep.episodeNumber));
+
+      // Only add integer episodes up to seasonTotalEpisodes
+      // This ensures we don't show episodes beyond what we have (unless metadata says there are more)
       for (let i = 1; i <= seasonTotalEpisodes; i++) {
-        const metaEp = seasonMetadataMap.get(i);
-        // Match file episodes by episode number within the season
-        const fileEp = seasonFileMap.get(i);
-        
+        allEpisodeNumbers.add(i);
+      }
+
+      // Convert to sorted array (decimals will sort correctly: 6, 6.5, 7, 7.5, 10, 10.5)
+      const sortedEpisodeNumbers = Array.from(allEpisodeNumbers).sort((a, b) => a - b);
+
+      // Generate episodes for all episode numbers (including decimals)
+      for (const epNum of sortedEpisodeNumbers) {
+        const metaEp = seasonMetadataMap.get(epNum);
+        const fileEp = seasonFileMap.get(epNum);
+
+        // Prioritize metadata episode title, but only if it's not a generic "Episode X" title
+        let episodeTitle = `Episode ${formatEpisodeNumber(epNum)}`;
+        if (metaEp?.title) {
+          const metaTitle = metaEp.title.trim();
+          const genericPattern = /^Episode\s+\d+(\.\d+)?$/i;
+          if (!genericPattern.test(metaTitle)) {
+            episodeTitle = metaTitle;
+          } else if (fileEp?.title) {
+            const fileTitle = fileEp.title.trim();
+            if (fileTitle && !/^Episode\s+\d+(\.\d+)?$/i.test(fileTitle)) {
+              episodeTitle = fileTitle;
+            } else {
+              episodeTitle = metaTitle;
+            }
+          } else {
+            episodeTitle = metaTitle;
+          }
+        } else if (fileEp?.title) {
+          const fileTitle = fileEp.title.trim();
+          if (fileTitle && !/^Episode\s+\d+(\.\d+)?$/i.test(fileTitle)) {
+            episodeTitle = fileTitle;
+          }
+        }
+
         seasonEpisodes.push({
-          episodeNumber: i,
+          episodeNumber: epNum,
           seasonNumber: season ?? undefined,
-          title: metaEp?.title || fileEp?.title || `Episode ${i}`,
+          title: episodeTitle,
           description: metaEp?.description || null,
           airDate: metaEp?.airDate || null,
           thumbnail: metaEp?.thumbnail || null,
@@ -175,24 +249,6 @@ function SeriesDetailPage() {
         });
       }
 
-      // Add any file episodes beyond season total (edge case)
-      for (const fileEp of seasonFiles) {
-        if (fileEp.episodeNumber > seasonTotalEpisodes) {
-          seasonEpisodes.push({
-            episodeNumber: fileEp.episodeNumber,
-            seasonNumber: fileEp.seasonNumber ?? undefined,
-            title: fileEp.title || `Episode ${fileEp.episodeNumber}`,
-            filePath: fileEp.filePath,
-            subtitlePath: fileEp.subtitlePath,
-            subtitlePaths: fileEp.subtitlePaths,
-            hasFile: true,
-          });
-        }
-      }
-
-      // Sort by episode number within season
-      seasonEpisodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
-
       episodesBySeason.set(season, {
         seasonNumber: season,
         episodes: seasonEpisodes,
@@ -201,11 +257,15 @@ function SeriesDetailPage() {
   }
 
   // Flatten for counting (but we'll display by season)
-  const allMergedEpisodes = Array.from(episodesBySeason.values()).flatMap(s => s.episodes);
+  const allMergedEpisodes = Array.from(episodesBySeason.values()).flatMap((s) => s.episodes);
 
-  const availableCount = isMovie ? (fileEpisodes.length > 0 ? 1 : 0) : allMergedEpisodes.filter(ep => ep.hasFile).length;
+  const availableCount = isMovie
+    ? fileEpisodes.length > 0
+      ? 1
+      : 0
+    : allMergedEpisodes.filter((ep) => ep.hasFile).length;
   const hasFile = fileEpisodes.length > 0;
-  
+
   // Prefer local cached images, fall back to remote URLs
   const bannerUrl = getImageUrl(seriesData.bannerLocal, seriesData.banner);
   const posterUrl = getImageUrl(seriesData.posterLocal, seriesData.poster);
@@ -220,7 +280,7 @@ function SeriesDetailPage() {
   };
 
   // Find first available episode for series
-  const firstAvailableEpisode = allMergedEpisodes.find(ep => ep.hasFile);
+  const firstAvailableEpisode = allMergedEpisodes.find((ep) => ep.hasFile);
   const handlePlaySeries = () => {
     if (firstAvailableEpisode) {
       navigate(`/player/${seriesId}/${firstAvailableEpisode.episodeNumber}`);
@@ -228,27 +288,27 @@ function SeriesDetailPage() {
   };
 
   return (
-    <div className={`series-detail ${isMovie ? 'movie-detail' : ''}`}>
+    <div className={`series-detail ${isMovie ? "movie-detail" : ""}`}>
       {/* Hero Banner with gradient overlay */}
-      <div 
-        className="detail-hero" 
-        style={{ 
-          backgroundImage: bannerUrl 
-            ? `url(${bannerUrl})` 
-            : posterUrl 
-              ? `url(${posterUrl})` 
-              : 'none' 
+      <div
+        className="detail-hero"
+        style={{
+          backgroundImage: bannerUrl
+            ? `url(${bannerUrl})`
+            : posterUrl
+              ? `url(${posterUrl})`
+              : "none",
         }}
       >
         <div className="detail-hero-overlay"></div>
-        
+
         <div className="detail-hero-content">
           {/* Poster */}
           <div className="detail-poster-wrapper">
             {posterUrl ? (
               <img
                 src={posterUrl}
-                alt={seriesData.title || 'Poster'}
+                alt={seriesData.title || "Poster"}
                 className="detail-poster"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
@@ -265,60 +325,64 @@ function SeriesDetailPage() {
               </div>
             )}
           </div>
-          
+
           {/* Info */}
           <div className="detail-info">
             <h1 className="detail-title">{seriesData.title}</h1>
-            
+
             {seriesData.titleRomaji && seriesData.titleRomaji !== seriesData.title && (
               <div className="detail-alt-title">{seriesData.titleRomaji}</div>
             )}
-            
+
             {/* Quick Stats Row */}
             <div className="detail-stats">
               {seriesData.averageScore && (
                 <div className="detail-stat detail-stat-score">
                   <Star className="stat-icon" size={16} />
-                  <span className="stat-value">{getDisplayRating(seriesData.averageScore, seriesData.source)}</span>
+                  <span className="stat-value">
+                    {getDisplayRating(seriesData.averageScore, seriesData.source)}
+                  </span>
                 </div>
               )}
-              
+
               {releaseYear && (
                 <div className="detail-stat">
                   <Calendar className="stat-icon" size={16} />
                   <span className="stat-value">{releaseYear}</span>
                 </div>
               )}
-              
+
               {durationText && (
                 <div className="detail-stat">
                   <Clock className="stat-icon" size={16} />
                   <span className="stat-value">{durationText}</span>
                 </div>
               )}
-              
+
               {!isMovie && seriesData.totalEpisodes && (
                 <div className="detail-stat">
                   <Tv className="stat-icon" size={16} />
                   <span className="stat-value">{seriesData.totalEpisodes} eps</span>
                 </div>
               )}
-              
+
               {isMovie && (
                 <div className="detail-stat detail-stat-movie">
                   <Film className="stat-icon" size={16} />
                   <span className="stat-value">Movie</span>
                 </div>
               )}
-              
+
               {seasonText && !isMovie && (
                 <div className="detail-stat">
                   <span className="stat-value">{seasonText}</span>
                 </div>
               )}
-              
+
               {seriesData.status && !isMovie && (
-                <div className={`detail-stat detail-stat-status status-${seriesData.status?.toLowerCase()}`}>
+                <div
+                  className={`detail-stat detail-stat-status status-${seriesData.status?.toLowerCase()}`}
+                >
                   <span className="stat-value">{seriesData.status}</span>
                 </div>
               )}
@@ -328,21 +392,23 @@ function SeriesDetailPage() {
             {seriesData.genres && seriesData.genres.length > 0 && (
               <div className="detail-genres">
                 {seriesData.genres.map((genre: string) => (
-                  <span key={genre} className="detail-genre-tag">{genre}</span>
+                  <span key={genre} className="detail-genre-tag">
+                    {genre}
+                  </span>
                 ))}
               </div>
             )}
 
             {/* Description */}
             {seriesData.description && (
-              <div 
+              <div
                 className="detail-description"
-                dangerouslySetInnerHTML={{ 
-                  __html: seriesData.description
-                    .replace(/<br\s*\/?>/gi, ' ')
-                    .replace(/<[^>]*>/g, '')
-                    .substring(0, 600) + 
-                    (seriesData.description.length > 600 ? '...' : '')
+                dangerouslySetInnerHTML={{
+                  __html:
+                    seriesData.description
+                      .replace(/<br\s*\/?>/gi, " ")
+                      .replace(/<[^>]*>/g, "")
+                      .substring(0, 600) + (seriesData.description.length > 600 ? "..." : ""),
                 }}
               />
             )}
@@ -351,7 +417,7 @@ function SeriesDetailPage() {
             {seriesData.studios && seriesData.studios.length > 0 && (
               <div className="detail-studio">
                 <span className="studio-label">Studio</span>
-                <span className="studio-name">{seriesData.studios.join(', ')}</span>
+                <span className="studio-name">{seriesData.studios.join(", ")}</span>
               </div>
             )}
 
@@ -378,8 +444,8 @@ function SeriesDetailPage() {
                   </button>
                 )
               )}
-              
-              <button className="action-btn action-btn-secondary" onClick={() => navigate('/')}>
+
+              <button className="action-btn action-btn-secondary" onClick={() => navigate("/")}>
                 <ArrowLeft size={16} strokeWidth={2} />
                 <span>Back</span>
               </button>
@@ -393,9 +459,11 @@ function SeriesDetailPage() {
         <div className="episodes-section">
           <h2 className="episodes-title">
             Episodes
-            <span className="episodes-count">{availableCount} / {allMergedEpisodes.length} available</span>
+            <span className="episodes-count">
+              {availableCount} / {allMergedEpisodes.length} available
+            </span>
           </h2>
-          
+
           {episodesBySeason.size > 0 ? (
             Array.from(episodesBySeason.values())
               .sort((a, b) => {
@@ -405,19 +473,20 @@ function SeriesDetailPage() {
                 return (a.seasonNumber ?? 0) - (b.seasonNumber ?? 0);
               })
               .map((seasonData) => (
-                <div key={seasonData.seasonNumber ?? 'no-season'} className="season-section">
+                <div key={seasonData.seasonNumber ?? "no-season"} className="season-section">
                   <h3 className="season-title">
-                    {seasonData.seasonNumber !== null 
+                    {seasonData.seasonNumber !== null
                       ? `Season ${seasonData.seasonNumber}`
-                      : 'Episodes'}
+                      : "Episodes"}
                     <span className="season-episode-count">
-                      {seasonData.episodes.filter(ep => ep.hasFile).length} / {seasonData.episodes.length} available
+                      {seasonData.episodes.filter((ep) => ep.hasFile).length} /{" "}
+                      {seasonData.episodes.length} available
                     </span>
                   </h3>
                   <div className="episodes-grid">
                     {seasonData.episodes.map((episode) => (
                       <EpisodeCard
-                        key={`${seasonData.seasonNumber ?? 'no-season'}-${episode.episodeNumber}`}
+                        key={`${seasonData.seasonNumber ?? "no-season"}-${episode.episodeNumber}`}
                         seriesId={seriesId}
                         episode={episode}
                         hasFile={episode.hasFile}
