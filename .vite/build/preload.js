@@ -17,6 +17,7 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   saveMetadata: (metadata) => electron.ipcRenderer.invoke("save-metadata", metadata),
   loadMetadata: () => electron.ipcRenderer.invoke("load-metadata"),
   clearMetadata: () => electron.ipcRenderer.invoke("clear-metadata"),
+  deleteSeries: (seriesId) => electron.ipcRenderer.invoke("delete-series", seriesId),
   getSeriesEpisodes: (seriesId) => electron.ipcRenderer.invoke("get-series-episodes", seriesId),
   // Image cache
   getImageCacheStats: () => electron.ipcRenderer.invoke("get-image-cache-stats"),

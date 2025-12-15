@@ -1,8 +1,7 @@
 import { app, protocol, net, BrowserWindow, ipcMain, Menu, dialog } from "electron";
 import require$$0$1, { fileURLToPath, pathToFileURL } from "url";
-import require$$1$1, { join as join$1, basename, extname, dirname } from "path";
+import require$$1$1, { join as join$1, basename, extname, dirname, isAbsolute, resolve, relative } from "path";
 import require$$6, { existsSync } from "fs";
-import { readdir, stat, writeFile, readFile, mkdir, rm, access } from "fs/promises";
 import require$$1 from "util";
 import stream, { Readable } from "stream";
 import require$$3 from "http";
@@ -13,4194 +12,10 @@ import require$$4$1 from "assert";
 import require$$1$2 from "tty";
 import require$$0$2 from "os";
 import zlib from "zlib";
-import { EventEmitter } from "events";
+import require$$4$2, { EventEmitter } from "events";
+import { stat, readdir, writeFile, readFile, mkdir, rm, access } from "fs/promises";
+import require$$0$3 from "readline";
 import { spawn } from "child_process";
-const VIDEO_EXTENSIONS = [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"];
-const SUBTITLE_EXTENSIONS = [".srt", ".vtt", ".ass", ".ssa"];
-function isVideoFile(filename) {
-  return VIDEO_EXTENSIONS.includes(extname(filename).toLowerCase());
-}
-function isSubtitleFile(filename) {
-  return SUBTITLE_EXTENSIONS.includes(extname(filename).toLowerCase());
-}
-function getBaseName(filename) {
-  return basename(filename, extname(filename));
-}
-function extractSeasonAndEpisode(filename) {
-  const baseName = getBaseName(filename);
-  const seasonEpisodeMatch = baseName.match(/\bS(\d+)E(\d+)\b/i);
-  if (seasonEpisodeMatch) {
-    return {
-      season: parseInt(seasonEpisodeMatch[1], 10),
-      episode: parseInt(seasonEpisodeMatch[2], 10)
-    };
-  }
-  const patterns = [
-    /Episode\s*(\d+)/i,
-    // "Episode 10" or "Episode10"
-    /Ep\.?\s*(\d+)/i,
-    // "Ep 10" or "Ep.10"
-    /E(\d{2,})/i,
-    // "E10" (at least 2 digits)
-    /\s-\s*(\d+)(?:\s|$)/,
-    // " - 10 " or " - 10" at end
-    /\[(\d+)\]/,
-    // "[10]"
-    /\s(\d{1,3})(?:\s|$)/
-    // " 10 " or " 10" at end (1-3 digit episode)
-  ];
-  for (const pattern of patterns) {
-    const match = baseName.match(pattern);
-    if (match) {
-      return {
-        season: null,
-        episode: parseInt(match[1], 10)
-      };
-    }
-  }
-  const numbers = baseName.match(/\d+/g);
-  if (numbers && numbers.length > 0) {
-    const nonYearNumbers = numbers.filter((n) => {
-      const num = parseInt(n, 10);
-      return num < 1900 || num > 2099;
-    });
-    if (nonYearNumbers.length > 0) {
-      return {
-        season: null,
-        episode: parseInt(nonYearNumbers[nonYearNumbers.length - 1], 10)
-      };
-    }
-  }
-  return { season: null, episode: 1 };
-}
-function extractSeasonNumber(folderName) {
-  const patterns = [
-    /Season\s*(\d+)/i,
-    // "Season 1" or "Season1"
-    /\bS(\d+)\b/i,
-    // "S01" or "S1"
-    /Season\s*(\d+)/i
-    // "Season 1"
-  ];
-  for (const pattern of patterns) {
-    const match = folderName.match(pattern);
-    if (match) {
-      return parseInt(match[1], 10);
-    }
-  }
-  return null;
-}
-function extractSeriesNameFromFilenames(videoFiles) {
-  if (videoFiles.length === 0) {
-    return "";
-  }
-  const cleanedNames = videoFiles.map((video) => {
-    const baseName = getBaseName(video.filename);
-    let cleaned = baseName.replace(/\s*\bS\d+E\d+\b.*$/i, "").replace(/\s*Episode\s*\d+.*$/i, "").replace(/\s*Ep\.?\s*\d+.*$/i, "").replace(/\s*\[\d+\].*$/, "").replace(/\s*-\s*\d{1,4}(?:\s|$).*$/, "").replace(/\s+\d{1,3}(?!\d)(?:\s|$)/g, "").replace(/\s*\[(?:1080|720|480|360)p?\]\s*/gi, " ").replace(/\s*\[(?:HD|SD|FHD|UHD)\]?\s*/gi, " ").replace(/\s*\(\d{4}\)\s*$/, "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\./g, " ").replace(/_/g, " ").replace(/\s+/g, " ").trim();
-    return cleaned;
-  });
-  if (cleanedNames.length === 1) {
-    return cleanedNames[0];
-  }
-  cleanedNames.sort((a, b) => a.length - b.length);
-  const shortest = cleanedNames[0];
-  let commonPrefix = "";
-  for (let i = 0; i < shortest.length; i++) {
-    const char = shortest[i];
-    if (cleanedNames.every((name) => name[i] === char)) {
-      commonPrefix += char;
-    } else {
-      break;
-    }
-  }
-  let result = commonPrefix.replace(/[-_\s]+$/, "").trim();
-  if (result.length < 3) {
-    const firstFileWords = cleanedNames[0].split(/\s+/).filter((w) => w.length > 0 && !/^\d+$/.test(w));
-    const commonWords = [];
-    for (let i = 0; i < firstFileWords.length; i++) {
-      const word = firstFileWords[i];
-      if (cleanedNames.every((name) => {
-        const words = name.split(/\s+/).filter((w) => w.length > 0 && !/^\d+$/.test(w));
-        return i < words.length && words[i] === word;
-      })) {
-        commonWords.push(word);
-      } else {
-        break;
-      }
-    }
-    result = commonWords.join(" ").trim();
-  }
-  if (!result || result.length < 2) {
-    result = cleanedNames[0];
-  }
-  result = result.replace(/\s*-\s*$/, "").replace(/\s+\d+\s*$/, "").trim();
-  return result;
-}
-function cleanMovieTitle(filename) {
-  const baseName = getBaseName(filename);
-  return baseName.replace(/\s*\(.*?\)\s*/g, "").replace(/\s*\[.*?\]\s*/g, "").replace(/\.\d{4}\./g, " ").replace(/\./g, " ").replace(/_/g, " ").replace(/\s+/g, " ").trim();
-}
-async function scanFolderForVideos(folderPath, folderSeason = null) {
-  const videos = [];
-  const subtitles = /* @__PURE__ */ new Map();
-  const folderName = basename(folderPath);
-  const seasonFromFolder = folderSeason ?? extractSeasonNumber(folderName);
-  try {
-    const entries = await readdir(folderPath);
-    for (const entry of entries) {
-      const fullPath = join$1(folderPath, entry);
-      try {
-        const stats = await stat(fullPath);
-        if (stats.isFile()) {
-          if (isVideoFile(entry)) {
-            const { season, episode } = extractSeasonAndEpisode(entry);
-            const finalSeason = season ?? seasonFromFolder;
-            videos.push({
-              filename: entry,
-              filePath: fullPath,
-              title: getBaseName(entry),
-              episodeNumber: episode,
-              seasonNumber: finalSeason,
-              subtitlePath: null,
-              subtitlePaths: [],
-              parentFolder: folderName
-            });
-          } else if (isSubtitleFile(entry)) {
-            const baseName = getBaseName(entry);
-            const existing = subtitles.get(baseName) || [];
-            existing.push(fullPath);
-            subtitles.set(baseName, existing);
-          }
-        }
-      } catch (err) {
-        console.warn(`Could not stat: ${fullPath}`);
-      }
-    }
-    for (const video of videos) {
-      const videoBase = getBaseName(video.filename);
-      const matchingSubs = subtitles.get(videoBase) || [];
-      if (matchingSubs.length > 0) {
-        video.subtitlePath = matchingSubs[0];
-        video.subtitlePaths = matchingSubs;
-      }
-    }
-  } catch (error) {
-    console.error(`Error scanning folder ${folderPath}:`, error);
-  }
-  return { videos, subtitles };
-}
-async function scanDirectory(rootPath) {
-  const results = [];
-  console.log(`
-=== Scanning: ${rootPath} ===`);
-  try {
-    const entries = await readdir(rootPath);
-    for (const entry of entries) {
-      const entryPath = join$1(rootPath, entry);
-      try {
-        const stats = await stat(entryPath);
-        if (stats.isDirectory()) {
-          const { videos: subVideos } = await scanFolderForVideos(entryPath);
-          const subEntries = await readdir(entryPath);
-          const subDirs = [];
-          for (const subEntry of subEntries) {
-            const subPath = join$1(entryPath, subEntry);
-            try {
-              const subStats = await stat(subPath);
-              if (subStats.isDirectory()) {
-                subDirs.push(subEntry);
-              }
-            } catch {
-            }
-          }
-          if (subDirs.length > 0 && subVideos.length === 0) {
-            console.log(`  📁 Category folder: ${entry}`);
-            for (const subDir of subDirs) {
-              const seriesPath = join$1(entryPath, subDir);
-              const seasonFromFolder = extractSeasonNumber(subDir);
-              const { videos } = await scanFolderForVideos(seriesPath, seasonFromFolder);
-              if (videos.length > 0) {
-                const seriesName = extractSeriesNameFromFilenames(videos);
-                const baseId = subDir.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-                const seriesId = seasonFromFolder ? `${baseId}_s${seasonFromFolder.toString().padStart(2, "0")}` : baseId;
-                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesName}"`);
-                results.push({
-                  id: seriesId,
-                  name: seriesName,
-                  type: "series",
-                  folderPath: seriesPath,
-                  files: videos.sort((a, b) => {
-                    const seasonA = a.seasonNumber ?? 0;
-                    const seasonB = b.seasonNumber ?? 0;
-                    if (seasonA !== seasonB) return seasonA - seasonB;
-                    return a.episodeNumber - b.episodeNumber;
-                  }),
-                  seasonNumber: seasonFromFolder
-                });
-              }
-            }
-            if (subVideos.length > 0) {
-              console.log(`    🎬 Loose videos in ${entry}: ${subVideos.length}`);
-              for (const video of subVideos) {
-                const movieTitle = cleanMovieTitle(video.filename);
-                const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-                console.log(`      🎬 Movie: ${video.filename} → search: "${movieTitle}"`);
-                results.push({
-                  id: `movie_${movieId}`,
-                  name: movieTitle,
-                  type: "movie",
-                  folderPath: entryPath,
-                  files: [video],
-                  seasonNumber: null
-                });
-              }
-            }
-          } else if (subVideos.length > 0) {
-            if (subVideos.length === 1) {
-              const video = subVideos[0];
-              const movieTitle = cleanMovieTitle(video.filename);
-              const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-              console.log(`  🎬 Movie: ${video.filename} → search: "${movieTitle}"`);
-              results.push({
-                id: `movie_${movieId}`,
-                name: movieTitle,
-                type: "movie",
-                folderPath: entryPath,
-                files: [video],
-                seasonNumber: null
-              });
-            } else {
-              const seriesName = extractSeriesNameFromFilenames(subVideos);
-              const seasonFromFolder = extractSeasonNumber(entry);
-              const baseId = entry.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-              const seriesId = seasonFromFolder ? `${baseId}_s${seasonFromFolder.toString().padStart(2, "0")}` : baseId;
-              console.log(`  📺 Series: ${entry} (${subVideos.length} episodes${seasonFromFolder ? `, Season ${seasonFromFolder}` : ""}) → search: "${seriesName}"`);
-              results.push({
-                id: seriesId,
-                name: seriesName,
-                type: "series",
-                folderPath: entryPath,
-                files: subVideos.sort((a, b) => {
-                  const seasonA = a.seasonNumber ?? 0;
-                  const seasonB = b.seasonNumber ?? 0;
-                  if (seasonA !== seasonB) return seasonA - seasonB;
-                  return a.episodeNumber - b.episodeNumber;
-                }),
-                seasonNumber: seasonFromFolder
-              });
-            }
-          }
-        } else if (stats.isFile() && isVideoFile(entry)) {
-          const movieTitle = cleanMovieTitle(entry);
-          const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-          console.log(`  🎬 Movie (root): ${entry} → search: "${movieTitle}"`);
-          const { episode: movieEpisode } = extractSeasonAndEpisode(entry);
-          results.push({
-            id: `movie_${movieId}`,
-            name: movieTitle,
-            type: "movie",
-            folderPath: rootPath,
-            files: [{
-              filename: entry,
-              filePath: entryPath,
-              title: getBaseName(entry),
-              episodeNumber: movieEpisode,
-              seasonNumber: null,
-              subtitlePath: null,
-              subtitlePaths: [],
-              parentFolder: basename(rootPath)
-            }],
-            seasonNumber: null
-          });
-        }
-      } catch (err) {
-        console.warn(`Could not process ${entryPath}:`, err);
-      }
-    }
-  } catch (error) {
-    console.error(`Error scanning root directory ${rootPath}:`, error);
-    throw error;
-  }
-  console.log(`=== Found ${results.length} media items ===
-`);
-  return results;
-}
-const folderHandler = {
-  async scanFolder(folderPath) {
-    if (!folderPath) {
-      throw new Error("Folder path is required");
-    }
-    return await scanDirectory(folderPath);
-  },
-  async scanMultipleFolders(folderPaths) {
-    const allResults = [];
-    for (const folderPath of folderPaths) {
-      try {
-        const results = await scanDirectory(folderPath);
-        allResults.push(...results);
-      } catch (error) {
-        console.error(`Error scanning ${folderPath}:`, error);
-      }
-    }
-    return allResults;
-  }
-};
-class ClientError extends Error {
-  response;
-  request;
-  constructor(response, request2) {
-    const message = `${ClientError.extractMessage(response)}: ${JSON.stringify({
-      response,
-      request: request2
-    })}`;
-    super(message);
-    Object.setPrototypeOf(this, ClientError.prototype);
-    this.response = response;
-    this.request = request2;
-    if (typeof Error.captureStackTrace === `function`) {
-      Error.captureStackTrace(this, ClientError);
-    }
-  }
-  static extractMessage(response) {
-    return response.errors?.[0]?.message ?? `GraphQL Error (Code: ${String(response.status)})`;
-  }
-}
-const uppercase = (str) => str.toUpperCase();
-const callOrIdentity = (value) => {
-  return typeof value === `function` ? value() : value;
-};
-const zip = (a, b) => a.map((k, i) => [k, b[i]]);
-const HeadersInitToPlainObject = (headers) => {
-  let oHeaders = {};
-  if (headers instanceof Headers) {
-    oHeaders = HeadersInstanceToPlainObject(headers);
-  } else if (Array.isArray(headers)) {
-    headers.forEach(([name, value]) => {
-      if (name && value !== void 0) {
-        oHeaders[name] = value;
-      }
-    });
-  } else if (headers) {
-    oHeaders = headers;
-  }
-  return oHeaders;
-};
-const HeadersInstanceToPlainObject = (headers) => {
-  const o = {};
-  headers.forEach((v, k) => {
-    o[k] = v;
-  });
-  return o;
-};
-const tryCatch = (fn) => {
-  try {
-    const result = fn();
-    if (isPromiseLikeValue(result)) {
-      return result.catch((error) => {
-        return errorFromMaybeError(error);
-      });
-    }
-    return result;
-  } catch (error) {
-    return errorFromMaybeError(error);
-  }
-};
-const errorFromMaybeError = (maybeError) => {
-  if (maybeError instanceof Error)
-    return maybeError;
-  return new Error(String(maybeError));
-};
-const isPromiseLikeValue = (value) => {
-  return typeof value === `object` && value !== null && `then` in value && typeof value.then === `function` && `catch` in value && typeof value.catch === `function` && `finally` in value && typeof value.finally === `function`;
-};
-const casesExhausted = (value) => {
-  throw new Error(`Unhandled case: ${String(value)}`);
-};
-const isPlainObject$1 = (value) => {
-  return typeof value === `object` && value !== null && !Array.isArray(value);
-};
-const parseBatchRequestArgs = (documentsOrOptions, requestHeaders) => {
-  return documentsOrOptions.documents ? documentsOrOptions : {
-    documents: documentsOrOptions,
-    requestHeaders,
-    signal: void 0
-  };
-};
-const parseRawRequestArgs = (queryOrOptions, variables, requestHeaders) => {
-  return queryOrOptions.query ? queryOrOptions : {
-    query: queryOrOptions,
-    variables,
-    requestHeaders,
-    signal: void 0
-  };
-};
-function devAssert(condition, message) {
-  const booleanCondition = Boolean(condition);
-  if (!booleanCondition) {
-    throw new Error(message);
-  }
-}
-function isObjectLike(value) {
-  return typeof value == "object" && value !== null;
-}
-function invariant(condition, message) {
-  const booleanCondition = Boolean(condition);
-  if (!booleanCondition) {
-    throw new Error(
-      "Unexpected invariant triggered."
-    );
-  }
-}
-const LineRegExp = /\r\n|[\n\r]/g;
-function getLocation(source, position) {
-  let lastLineStart = 0;
-  let line = 1;
-  for (const match of source.body.matchAll(LineRegExp)) {
-    typeof match.index === "number" || invariant(false);
-    if (match.index >= position) {
-      break;
-    }
-    lastLineStart = match.index + match[0].length;
-    line += 1;
-  }
-  return {
-    line,
-    column: position + 1 - lastLineStart
-  };
-}
-function printLocation(location) {
-  return printSourceLocation(
-    location.source,
-    getLocation(location.source, location.start)
-  );
-}
-function printSourceLocation(source, sourceLocation) {
-  const firstLineColumnOffset = source.locationOffset.column - 1;
-  const body = "".padStart(firstLineColumnOffset) + source.body;
-  const lineIndex = sourceLocation.line - 1;
-  const lineOffset = source.locationOffset.line - 1;
-  const lineNum = sourceLocation.line + lineOffset;
-  const columnOffset = sourceLocation.line === 1 ? firstLineColumnOffset : 0;
-  const columnNum = sourceLocation.column + columnOffset;
-  const locationStr = `${source.name}:${lineNum}:${columnNum}
-`;
-  const lines = body.split(/\r\n|[\n\r]/g);
-  const locationLine = lines[lineIndex];
-  if (locationLine.length > 120) {
-    const subLineIndex = Math.floor(columnNum / 80);
-    const subLineColumnNum = columnNum % 80;
-    const subLines = [];
-    for (let i = 0; i < locationLine.length; i += 80) {
-      subLines.push(locationLine.slice(i, i + 80));
-    }
-    return locationStr + printPrefixedLines([
-      [`${lineNum} |`, subLines[0]],
-      ...subLines.slice(1, subLineIndex + 1).map((subLine) => ["|", subLine]),
-      ["|", "^".padStart(subLineColumnNum)],
-      ["|", subLines[subLineIndex + 1]]
-    ]);
-  }
-  return locationStr + printPrefixedLines([
-    // Lines specified like this: ["prefix", "string"],
-    [`${lineNum - 1} |`, lines[lineIndex - 1]],
-    [`${lineNum} |`, locationLine],
-    ["|", "^".padStart(columnNum)],
-    [`${lineNum + 1} |`, lines[lineIndex + 1]]
-  ]);
-}
-function printPrefixedLines(lines) {
-  const existingLines = lines.filter(([_, line]) => line !== void 0);
-  const padLen = Math.max(...existingLines.map(([prefix]) => prefix.length));
-  return existingLines.map(([prefix, line]) => prefix.padStart(padLen) + (line ? " " + line : "")).join("\n");
-}
-function toNormalizedOptions(args) {
-  const firstArg = args[0];
-  if (firstArg == null || "kind" in firstArg || "length" in firstArg) {
-    return {
-      nodes: firstArg,
-      source: args[1],
-      positions: args[2],
-      path: args[3],
-      originalError: args[4],
-      extensions: args[5]
-    };
-  }
-  return firstArg;
-}
-class GraphQLError extends Error {
-  /**
-   * An array of `{ line, column }` locations within the source GraphQL document
-   * which correspond to this error.
-   *
-   * Errors during validation often contain multiple locations, for example to
-   * point out two things with the same name. Errors during execution include a
-   * single location, the field which produced the error.
-   *
-   * Enumerable, and appears in the result of JSON.stringify().
-   */
-  /**
-   * An array describing the JSON-path into the execution response which
-   * corresponds to this error. Only included for errors during execution.
-   *
-   * Enumerable, and appears in the result of JSON.stringify().
-   */
-  /**
-   * An array of GraphQL AST Nodes corresponding to this error.
-   */
-  /**
-   * The source GraphQL document for the first location of this error.
-   *
-   * Note that if this Error represents more than one node, the source may not
-   * represent nodes after the first node.
-   */
-  /**
-   * An array of character offsets within the source GraphQL document
-   * which correspond to this error.
-   */
-  /**
-   * The original error thrown from a field resolver during execution.
-   */
-  /**
-   * Extension fields to add to the formatted error.
-   */
-  /**
-   * @deprecated Please use the `GraphQLErrorOptions` constructor overload instead.
-   */
-  constructor(message, ...rawArgs) {
-    var _this$nodes, _nodeLocations$, _ref;
-    const { nodes, source, positions, path, originalError, extensions } = toNormalizedOptions(rawArgs);
-    super(message);
-    this.name = "GraphQLError";
-    this.path = path !== null && path !== void 0 ? path : void 0;
-    this.originalError = originalError !== null && originalError !== void 0 ? originalError : void 0;
-    this.nodes = undefinedIfEmpty(
-      Array.isArray(nodes) ? nodes : nodes ? [nodes] : void 0
-    );
-    const nodeLocations = undefinedIfEmpty(
-      (_this$nodes = this.nodes) === null || _this$nodes === void 0 ? void 0 : _this$nodes.map((node2) => node2.loc).filter((loc) => loc != null)
-    );
-    this.source = source !== null && source !== void 0 ? source : nodeLocations === null || nodeLocations === void 0 ? void 0 : (_nodeLocations$ = nodeLocations[0]) === null || _nodeLocations$ === void 0 ? void 0 : _nodeLocations$.source;
-    this.positions = positions !== null && positions !== void 0 ? positions : nodeLocations === null || nodeLocations === void 0 ? void 0 : nodeLocations.map((loc) => loc.start);
-    this.locations = positions && source ? positions.map((pos) => getLocation(source, pos)) : nodeLocations === null || nodeLocations === void 0 ? void 0 : nodeLocations.map((loc) => getLocation(loc.source, loc.start));
-    const originalExtensions = isObjectLike(
-      originalError === null || originalError === void 0 ? void 0 : originalError.extensions
-    ) ? originalError === null || originalError === void 0 ? void 0 : originalError.extensions : void 0;
-    this.extensions = (_ref = extensions !== null && extensions !== void 0 ? extensions : originalExtensions) !== null && _ref !== void 0 ? _ref : /* @__PURE__ */ Object.create(null);
-    Object.defineProperties(this, {
-      message: {
-        writable: true,
-        enumerable: true
-      },
-      name: {
-        enumerable: false
-      },
-      nodes: {
-        enumerable: false
-      },
-      source: {
-        enumerable: false
-      },
-      positions: {
-        enumerable: false
-      },
-      originalError: {
-        enumerable: false
-      }
-    });
-    if (originalError !== null && originalError !== void 0 && originalError.stack) {
-      Object.defineProperty(this, "stack", {
-        value: originalError.stack,
-        writable: true,
-        configurable: true
-      });
-    } else if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, GraphQLError);
-    } else {
-      Object.defineProperty(this, "stack", {
-        value: Error().stack,
-        writable: true,
-        configurable: true
-      });
-    }
-  }
-  get [Symbol.toStringTag]() {
-    return "GraphQLError";
-  }
-  toString() {
-    let output = this.message;
-    if (this.nodes) {
-      for (const node2 of this.nodes) {
-        if (node2.loc) {
-          output += "\n\n" + printLocation(node2.loc);
-        }
-      }
-    } else if (this.source && this.locations) {
-      for (const location of this.locations) {
-        output += "\n\n" + printSourceLocation(this.source, location);
-      }
-    }
-    return output;
-  }
-  toJSON() {
-    const formattedError = {
-      message: this.message
-    };
-    if (this.locations != null) {
-      formattedError.locations = this.locations;
-    }
-    if (this.path != null) {
-      formattedError.path = this.path;
-    }
-    if (this.extensions != null && Object.keys(this.extensions).length > 0) {
-      formattedError.extensions = this.extensions;
-    }
-    return formattedError;
-  }
-}
-function undefinedIfEmpty(array) {
-  return array === void 0 || array.length === 0 ? void 0 : array;
-}
-function syntaxError(source, position, description) {
-  return new GraphQLError(`Syntax Error: ${description}`, {
-    source,
-    positions: [position]
-  });
-}
-class Location {
-  /**
-   * The character offset at which this Node begins.
-   */
-  /**
-   * The character offset at which this Node ends.
-   */
-  /**
-   * The Token at which this Node begins.
-   */
-  /**
-   * The Token at which this Node ends.
-   */
-  /**
-   * The Source document the AST represents.
-   */
-  constructor(startToken, endToken, source) {
-    this.start = startToken.start;
-    this.end = endToken.end;
-    this.startToken = startToken;
-    this.endToken = endToken;
-    this.source = source;
-  }
-  get [Symbol.toStringTag]() {
-    return "Location";
-  }
-  toJSON() {
-    return {
-      start: this.start,
-      end: this.end
-    };
-  }
-}
-class Token {
-  /**
-   * The kind of Token.
-   */
-  /**
-   * The character offset at which this Node begins.
-   */
-  /**
-   * The character offset at which this Node ends.
-   */
-  /**
-   * The 1-indexed line number on which this Token appears.
-   */
-  /**
-   * The 1-indexed column number at which this Token begins.
-   */
-  /**
-   * For non-punctuation tokens, represents the interpreted value of the token.
-   *
-   * Note: is undefined for punctuation tokens, but typed as string for
-   * convenience in the parser.
-   */
-  /**
-   * Tokens exist as nodes in a double-linked-list amongst all tokens
-   * including ignored tokens. <SOF> is always the first node and <EOF>
-   * the last.
-   */
-  constructor(kind, start, end, line, column, value) {
-    this.kind = kind;
-    this.start = start;
-    this.end = end;
-    this.line = line;
-    this.column = column;
-    this.value = value;
-    this.prev = null;
-    this.next = null;
-  }
-  get [Symbol.toStringTag]() {
-    return "Token";
-  }
-  toJSON() {
-    return {
-      kind: this.kind,
-      value: this.value,
-      line: this.line,
-      column: this.column
-    };
-  }
-}
-const QueryDocumentKeys = {
-  Name: [],
-  Document: ["definitions"],
-  OperationDefinition: [
-    "description",
-    "name",
-    "variableDefinitions",
-    "directives",
-    "selectionSet"
-  ],
-  VariableDefinition: [
-    "description",
-    "variable",
-    "type",
-    "defaultValue",
-    "directives"
-  ],
-  Variable: ["name"],
-  SelectionSet: ["selections"],
-  Field: ["alias", "name", "arguments", "directives", "selectionSet"],
-  Argument: ["name", "value"],
-  FragmentSpread: ["name", "directives"],
-  InlineFragment: ["typeCondition", "directives", "selectionSet"],
-  FragmentDefinition: [
-    "description",
-    "name",
-    // Note: fragment variable definitions are deprecated and will removed in v17.0.0
-    "variableDefinitions",
-    "typeCondition",
-    "directives",
-    "selectionSet"
-  ],
-  IntValue: [],
-  FloatValue: [],
-  StringValue: [],
-  BooleanValue: [],
-  NullValue: [],
-  EnumValue: [],
-  ListValue: ["values"],
-  ObjectValue: ["fields"],
-  ObjectField: ["name", "value"],
-  Directive: ["name", "arguments"],
-  NamedType: ["name"],
-  ListType: ["type"],
-  NonNullType: ["type"],
-  SchemaDefinition: ["description", "directives", "operationTypes"],
-  OperationTypeDefinition: ["type"],
-  ScalarTypeDefinition: ["description", "name", "directives"],
-  ObjectTypeDefinition: [
-    "description",
-    "name",
-    "interfaces",
-    "directives",
-    "fields"
-  ],
-  FieldDefinition: ["description", "name", "arguments", "type", "directives"],
-  InputValueDefinition: [
-    "description",
-    "name",
-    "type",
-    "defaultValue",
-    "directives"
-  ],
-  InterfaceTypeDefinition: [
-    "description",
-    "name",
-    "interfaces",
-    "directives",
-    "fields"
-  ],
-  UnionTypeDefinition: ["description", "name", "directives", "types"],
-  EnumTypeDefinition: ["description", "name", "directives", "values"],
-  EnumValueDefinition: ["description", "name", "directives"],
-  InputObjectTypeDefinition: ["description", "name", "directives", "fields"],
-  DirectiveDefinition: ["description", "name", "arguments", "locations"],
-  SchemaExtension: ["directives", "operationTypes"],
-  ScalarTypeExtension: ["name", "directives"],
-  ObjectTypeExtension: ["name", "interfaces", "directives", "fields"],
-  InterfaceTypeExtension: ["name", "interfaces", "directives", "fields"],
-  UnionTypeExtension: ["name", "directives", "types"],
-  EnumTypeExtension: ["name", "directives", "values"],
-  InputObjectTypeExtension: ["name", "directives", "fields"],
-  TypeCoordinate: ["name"],
-  MemberCoordinate: ["name", "memberName"],
-  ArgumentCoordinate: ["name", "fieldName", "argumentName"],
-  DirectiveCoordinate: ["name"],
-  DirectiveArgumentCoordinate: ["name", "argumentName"]
-};
-const kindValues = new Set(Object.keys(QueryDocumentKeys));
-function isNode(maybeNode) {
-  const maybeKind = maybeNode === null || maybeNode === void 0 ? void 0 : maybeNode.kind;
-  return typeof maybeKind === "string" && kindValues.has(maybeKind);
-}
-var OperationTypeNode;
-(function(OperationTypeNode2) {
-  OperationTypeNode2["QUERY"] = "query";
-  OperationTypeNode2["MUTATION"] = "mutation";
-  OperationTypeNode2["SUBSCRIPTION"] = "subscription";
-})(OperationTypeNode || (OperationTypeNode = {}));
-var DirectiveLocation;
-(function(DirectiveLocation2) {
-  DirectiveLocation2["QUERY"] = "QUERY";
-  DirectiveLocation2["MUTATION"] = "MUTATION";
-  DirectiveLocation2["SUBSCRIPTION"] = "SUBSCRIPTION";
-  DirectiveLocation2["FIELD"] = "FIELD";
-  DirectiveLocation2["FRAGMENT_DEFINITION"] = "FRAGMENT_DEFINITION";
-  DirectiveLocation2["FRAGMENT_SPREAD"] = "FRAGMENT_SPREAD";
-  DirectiveLocation2["INLINE_FRAGMENT"] = "INLINE_FRAGMENT";
-  DirectiveLocation2["VARIABLE_DEFINITION"] = "VARIABLE_DEFINITION";
-  DirectiveLocation2["SCHEMA"] = "SCHEMA";
-  DirectiveLocation2["SCALAR"] = "SCALAR";
-  DirectiveLocation2["OBJECT"] = "OBJECT";
-  DirectiveLocation2["FIELD_DEFINITION"] = "FIELD_DEFINITION";
-  DirectiveLocation2["ARGUMENT_DEFINITION"] = "ARGUMENT_DEFINITION";
-  DirectiveLocation2["INTERFACE"] = "INTERFACE";
-  DirectiveLocation2["UNION"] = "UNION";
-  DirectiveLocation2["ENUM"] = "ENUM";
-  DirectiveLocation2["ENUM_VALUE"] = "ENUM_VALUE";
-  DirectiveLocation2["INPUT_OBJECT"] = "INPUT_OBJECT";
-  DirectiveLocation2["INPUT_FIELD_DEFINITION"] = "INPUT_FIELD_DEFINITION";
-})(DirectiveLocation || (DirectiveLocation = {}));
-var Kind;
-(function(Kind2) {
-  Kind2["NAME"] = "Name";
-  Kind2["DOCUMENT"] = "Document";
-  Kind2["OPERATION_DEFINITION"] = "OperationDefinition";
-  Kind2["VARIABLE_DEFINITION"] = "VariableDefinition";
-  Kind2["SELECTION_SET"] = "SelectionSet";
-  Kind2["FIELD"] = "Field";
-  Kind2["ARGUMENT"] = "Argument";
-  Kind2["FRAGMENT_SPREAD"] = "FragmentSpread";
-  Kind2["INLINE_FRAGMENT"] = "InlineFragment";
-  Kind2["FRAGMENT_DEFINITION"] = "FragmentDefinition";
-  Kind2["VARIABLE"] = "Variable";
-  Kind2["INT"] = "IntValue";
-  Kind2["FLOAT"] = "FloatValue";
-  Kind2["STRING"] = "StringValue";
-  Kind2["BOOLEAN"] = "BooleanValue";
-  Kind2["NULL"] = "NullValue";
-  Kind2["ENUM"] = "EnumValue";
-  Kind2["LIST"] = "ListValue";
-  Kind2["OBJECT"] = "ObjectValue";
-  Kind2["OBJECT_FIELD"] = "ObjectField";
-  Kind2["DIRECTIVE"] = "Directive";
-  Kind2["NAMED_TYPE"] = "NamedType";
-  Kind2["LIST_TYPE"] = "ListType";
-  Kind2["NON_NULL_TYPE"] = "NonNullType";
-  Kind2["SCHEMA_DEFINITION"] = "SchemaDefinition";
-  Kind2["OPERATION_TYPE_DEFINITION"] = "OperationTypeDefinition";
-  Kind2["SCALAR_TYPE_DEFINITION"] = "ScalarTypeDefinition";
-  Kind2["OBJECT_TYPE_DEFINITION"] = "ObjectTypeDefinition";
-  Kind2["FIELD_DEFINITION"] = "FieldDefinition";
-  Kind2["INPUT_VALUE_DEFINITION"] = "InputValueDefinition";
-  Kind2["INTERFACE_TYPE_DEFINITION"] = "InterfaceTypeDefinition";
-  Kind2["UNION_TYPE_DEFINITION"] = "UnionTypeDefinition";
-  Kind2["ENUM_TYPE_DEFINITION"] = "EnumTypeDefinition";
-  Kind2["ENUM_VALUE_DEFINITION"] = "EnumValueDefinition";
-  Kind2["INPUT_OBJECT_TYPE_DEFINITION"] = "InputObjectTypeDefinition";
-  Kind2["DIRECTIVE_DEFINITION"] = "DirectiveDefinition";
-  Kind2["SCHEMA_EXTENSION"] = "SchemaExtension";
-  Kind2["SCALAR_TYPE_EXTENSION"] = "ScalarTypeExtension";
-  Kind2["OBJECT_TYPE_EXTENSION"] = "ObjectTypeExtension";
-  Kind2["INTERFACE_TYPE_EXTENSION"] = "InterfaceTypeExtension";
-  Kind2["UNION_TYPE_EXTENSION"] = "UnionTypeExtension";
-  Kind2["ENUM_TYPE_EXTENSION"] = "EnumTypeExtension";
-  Kind2["INPUT_OBJECT_TYPE_EXTENSION"] = "InputObjectTypeExtension";
-  Kind2["TYPE_COORDINATE"] = "TypeCoordinate";
-  Kind2["MEMBER_COORDINATE"] = "MemberCoordinate";
-  Kind2["ARGUMENT_COORDINATE"] = "ArgumentCoordinate";
-  Kind2["DIRECTIVE_COORDINATE"] = "DirectiveCoordinate";
-  Kind2["DIRECTIVE_ARGUMENT_COORDINATE"] = "DirectiveArgumentCoordinate";
-})(Kind || (Kind = {}));
-function isWhiteSpace(code) {
-  return code === 9 || code === 32;
-}
-function isDigit(code) {
-  return code >= 48 && code <= 57;
-}
-function isLetter(code) {
-  return code >= 97 && code <= 122 || // A-Z
-  code >= 65 && code <= 90;
-}
-function isNameStart(code) {
-  return isLetter(code) || code === 95;
-}
-function isNameContinue(code) {
-  return isLetter(code) || isDigit(code) || code === 95;
-}
-function dedentBlockStringLines(lines) {
-  var _firstNonEmptyLine2;
-  let commonIndent = Number.MAX_SAFE_INTEGER;
-  let firstNonEmptyLine = null;
-  let lastNonEmptyLine = -1;
-  for (let i = 0; i < lines.length; ++i) {
-    var _firstNonEmptyLine;
-    const line = lines[i];
-    const indent2 = leadingWhitespace(line);
-    if (indent2 === line.length) {
-      continue;
-    }
-    firstNonEmptyLine = (_firstNonEmptyLine = firstNonEmptyLine) !== null && _firstNonEmptyLine !== void 0 ? _firstNonEmptyLine : i;
-    lastNonEmptyLine = i;
-    if (i !== 0 && indent2 < commonIndent) {
-      commonIndent = indent2;
-    }
-  }
-  return lines.map((line, i) => i === 0 ? line : line.slice(commonIndent)).slice(
-    (_firstNonEmptyLine2 = firstNonEmptyLine) !== null && _firstNonEmptyLine2 !== void 0 ? _firstNonEmptyLine2 : 0,
-    lastNonEmptyLine + 1
-  );
-}
-function leadingWhitespace(str) {
-  let i = 0;
-  while (i < str.length && isWhiteSpace(str.charCodeAt(i))) {
-    ++i;
-  }
-  return i;
-}
-function printBlockString(value, options) {
-  const escapedValue = value.replace(/"""/g, '\\"""');
-  const lines = escapedValue.split(/\r\n|[\n\r]/g);
-  const isSingleLine = lines.length === 1;
-  const forceLeadingNewLine = lines.length > 1 && lines.slice(1).every((line) => line.length === 0 || isWhiteSpace(line.charCodeAt(0)));
-  const hasTrailingTripleQuotes = escapedValue.endsWith('\\"""');
-  const hasTrailingQuote = value.endsWith('"') && !hasTrailingTripleQuotes;
-  const hasTrailingSlash = value.endsWith("\\");
-  const forceTrailingNewline = hasTrailingQuote || hasTrailingSlash;
-  const printAsMultipleLines = (
-    // add leading and trailing new lines only if it improves readability
-    !isSingleLine || value.length > 70 || forceTrailingNewline || forceLeadingNewLine || hasTrailingTripleQuotes
-  );
-  let result = "";
-  const skipLeadingNewLine = isSingleLine && isWhiteSpace(value.charCodeAt(0));
-  if (printAsMultipleLines && !skipLeadingNewLine || forceLeadingNewLine) {
-    result += "\n";
-  }
-  result += escapedValue;
-  if (printAsMultipleLines || forceTrailingNewline) {
-    result += "\n";
-  }
-  return '"""' + result + '"""';
-}
-var TokenKind;
-(function(TokenKind2) {
-  TokenKind2["SOF"] = "<SOF>";
-  TokenKind2["EOF"] = "<EOF>";
-  TokenKind2["BANG"] = "!";
-  TokenKind2["DOLLAR"] = "$";
-  TokenKind2["AMP"] = "&";
-  TokenKind2["PAREN_L"] = "(";
-  TokenKind2["PAREN_R"] = ")";
-  TokenKind2["DOT"] = ".";
-  TokenKind2["SPREAD"] = "...";
-  TokenKind2["COLON"] = ":";
-  TokenKind2["EQUALS"] = "=";
-  TokenKind2["AT"] = "@";
-  TokenKind2["BRACKET_L"] = "[";
-  TokenKind2["BRACKET_R"] = "]";
-  TokenKind2["BRACE_L"] = "{";
-  TokenKind2["PIPE"] = "|";
-  TokenKind2["BRACE_R"] = "}";
-  TokenKind2["NAME"] = "Name";
-  TokenKind2["INT"] = "Int";
-  TokenKind2["FLOAT"] = "Float";
-  TokenKind2["STRING"] = "String";
-  TokenKind2["BLOCK_STRING"] = "BlockString";
-  TokenKind2["COMMENT"] = "Comment";
-})(TokenKind || (TokenKind = {}));
-class Lexer {
-  /**
-   * The previously focused non-ignored token.
-   */
-  /**
-   * The currently focused non-ignored token.
-   */
-  /**
-   * The (1-indexed) line containing the current token.
-   */
-  /**
-   * The character offset at which the current line begins.
-   */
-  constructor(source) {
-    const startOfFileToken = new Token(TokenKind.SOF, 0, 0, 0, 0);
-    this.source = source;
-    this.lastToken = startOfFileToken;
-    this.token = startOfFileToken;
-    this.line = 1;
-    this.lineStart = 0;
-  }
-  get [Symbol.toStringTag]() {
-    return "Lexer";
-  }
-  /**
-   * Advances the token stream to the next non-ignored token.
-   */
-  advance() {
-    this.lastToken = this.token;
-    const token = this.token = this.lookahead();
-    return token;
-  }
-  /**
-   * Looks ahead and returns the next non-ignored token, but does not change
-   * the state of Lexer.
-   */
-  lookahead() {
-    let token = this.token;
-    if (token.kind !== TokenKind.EOF) {
-      do {
-        if (token.next) {
-          token = token.next;
-        } else {
-          const nextToken = readNextToken(this, token.end);
-          token.next = nextToken;
-          nextToken.prev = token;
-          token = nextToken;
-        }
-      } while (token.kind === TokenKind.COMMENT);
-    }
-    return token;
-  }
-}
-function isPunctuatorTokenKind(kind) {
-  return kind === TokenKind.BANG || kind === TokenKind.DOLLAR || kind === TokenKind.AMP || kind === TokenKind.PAREN_L || kind === TokenKind.PAREN_R || kind === TokenKind.DOT || kind === TokenKind.SPREAD || kind === TokenKind.COLON || kind === TokenKind.EQUALS || kind === TokenKind.AT || kind === TokenKind.BRACKET_L || kind === TokenKind.BRACKET_R || kind === TokenKind.BRACE_L || kind === TokenKind.PIPE || kind === TokenKind.BRACE_R;
-}
-function isUnicodeScalarValue(code) {
-  return code >= 0 && code <= 55295 || code >= 57344 && code <= 1114111;
-}
-function isSupplementaryCodePoint(body, location) {
-  return isLeadingSurrogate(body.charCodeAt(location)) && isTrailingSurrogate(body.charCodeAt(location + 1));
-}
-function isLeadingSurrogate(code) {
-  return code >= 55296 && code <= 56319;
-}
-function isTrailingSurrogate(code) {
-  return code >= 56320 && code <= 57343;
-}
-function printCodePointAt(lexer, location) {
-  const code = lexer.source.body.codePointAt(location);
-  if (code === void 0) {
-    return TokenKind.EOF;
-  } else if (code >= 32 && code <= 126) {
-    const char = String.fromCodePoint(code);
-    return char === '"' ? `'"'` : `"${char}"`;
-  }
-  return "U+" + code.toString(16).toUpperCase().padStart(4, "0");
-}
-function createToken(lexer, kind, start, end, value) {
-  const line = lexer.line;
-  const col = 1 + start - lexer.lineStart;
-  return new Token(kind, start, end, line, col, value);
-}
-function readNextToken(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let position = start;
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    switch (code) {
-      // Ignored ::
-      //   - UnicodeBOM
-      //   - WhiteSpace
-      //   - LineTerminator
-      //   - Comment
-      //   - Comma
-      //
-      // UnicodeBOM :: "Byte Order Mark (U+FEFF)"
-      //
-      // WhiteSpace ::
-      //   - "Horizontal Tab (U+0009)"
-      //   - "Space (U+0020)"
-      //
-      // Comma :: ,
-      case 65279:
-      // <BOM>
-      case 9:
-      // \t
-      case 32:
-      // <space>
-      case 44:
-        ++position;
-        continue;
-      // LineTerminator ::
-      //   - "New Line (U+000A)"
-      //   - "Carriage Return (U+000D)" [lookahead != "New Line (U+000A)"]
-      //   - "Carriage Return (U+000D)" "New Line (U+000A)"
-      case 10:
-        ++position;
-        ++lexer.line;
-        lexer.lineStart = position;
-        continue;
-      case 13:
-        if (body.charCodeAt(position + 1) === 10) {
-          position += 2;
-        } else {
-          ++position;
-        }
-        ++lexer.line;
-        lexer.lineStart = position;
-        continue;
-      // Comment
-      case 35:
-        return readComment(lexer, position);
-      // Token ::
-      //   - Punctuator
-      //   - Name
-      //   - IntValue
-      //   - FloatValue
-      //   - StringValue
-      //
-      // Punctuator :: one of ! $ & ( ) ... : = @ [ ] { | }
-      case 33:
-        return createToken(lexer, TokenKind.BANG, position, position + 1);
-      case 36:
-        return createToken(lexer, TokenKind.DOLLAR, position, position + 1);
-      case 38:
-        return createToken(lexer, TokenKind.AMP, position, position + 1);
-      case 40:
-        return createToken(lexer, TokenKind.PAREN_L, position, position + 1);
-      case 41:
-        return createToken(lexer, TokenKind.PAREN_R, position, position + 1);
-      case 46:
-        if (body.charCodeAt(position + 1) === 46 && body.charCodeAt(position + 2) === 46) {
-          return createToken(lexer, TokenKind.SPREAD, position, position + 3);
-        }
-        break;
-      case 58:
-        return createToken(lexer, TokenKind.COLON, position, position + 1);
-      case 61:
-        return createToken(lexer, TokenKind.EQUALS, position, position + 1);
-      case 64:
-        return createToken(lexer, TokenKind.AT, position, position + 1);
-      case 91:
-        return createToken(lexer, TokenKind.BRACKET_L, position, position + 1);
-      case 93:
-        return createToken(lexer, TokenKind.BRACKET_R, position, position + 1);
-      case 123:
-        return createToken(lexer, TokenKind.BRACE_L, position, position + 1);
-      case 124:
-        return createToken(lexer, TokenKind.PIPE, position, position + 1);
-      case 125:
-        return createToken(lexer, TokenKind.BRACE_R, position, position + 1);
-      // StringValue
-      case 34:
-        if (body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
-          return readBlockString(lexer, position);
-        }
-        return readString(lexer, position);
-    }
-    if (isDigit(code) || code === 45) {
-      return readNumber(lexer, position, code);
-    }
-    if (isNameStart(code)) {
-      return readName(lexer, position);
-    }
-    throw syntaxError(
-      lexer.source,
-      position,
-      code === 39 ? `Unexpected single quote character ('), did you mean to use a double quote (")?` : isUnicodeScalarValue(code) || isSupplementaryCodePoint(body, position) ? `Unexpected character: ${printCodePointAt(lexer, position)}.` : `Invalid character: ${printCodePointAt(lexer, position)}.`
-    );
-  }
-  return createToken(lexer, TokenKind.EOF, bodyLength, bodyLength);
-}
-function readComment(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let position = start + 1;
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    if (code === 10 || code === 13) {
-      break;
-    }
-    if (isUnicodeScalarValue(code)) {
-      ++position;
-    } else if (isSupplementaryCodePoint(body, position)) {
-      position += 2;
-    } else {
-      break;
-    }
-  }
-  return createToken(
-    lexer,
-    TokenKind.COMMENT,
-    start,
-    position,
-    body.slice(start + 1, position)
-  );
-}
-function readNumber(lexer, start, firstCode) {
-  const body = lexer.source.body;
-  let position = start;
-  let code = firstCode;
-  let isFloat = false;
-  if (code === 45) {
-    code = body.charCodeAt(++position);
-  }
-  if (code === 48) {
-    code = body.charCodeAt(++position);
-    if (isDigit(code)) {
-      throw syntaxError(
-        lexer.source,
-        position,
-        `Invalid number, unexpected digit after 0: ${printCodePointAt(
-          lexer,
-          position
-        )}.`
-      );
-    }
-  } else {
-    position = readDigits(lexer, position, code);
-    code = body.charCodeAt(position);
-  }
-  if (code === 46) {
-    isFloat = true;
-    code = body.charCodeAt(++position);
-    position = readDigits(lexer, position, code);
-    code = body.charCodeAt(position);
-  }
-  if (code === 69 || code === 101) {
-    isFloat = true;
-    code = body.charCodeAt(++position);
-    if (code === 43 || code === 45) {
-      code = body.charCodeAt(++position);
-    }
-    position = readDigits(lexer, position, code);
-    code = body.charCodeAt(position);
-  }
-  if (code === 46 || isNameStart(code)) {
-    throw syntaxError(
-      lexer.source,
-      position,
-      `Invalid number, expected digit but got: ${printCodePointAt(
-        lexer,
-        position
-      )}.`
-    );
-  }
-  return createToken(
-    lexer,
-    isFloat ? TokenKind.FLOAT : TokenKind.INT,
-    start,
-    position,
-    body.slice(start, position)
-  );
-}
-function readDigits(lexer, start, firstCode) {
-  if (!isDigit(firstCode)) {
-    throw syntaxError(
-      lexer.source,
-      start,
-      `Invalid number, expected digit but got: ${printCodePointAt(
-        lexer,
-        start
-      )}.`
-    );
-  }
-  const body = lexer.source.body;
-  let position = start + 1;
-  while (isDigit(body.charCodeAt(position))) {
-    ++position;
-  }
-  return position;
-}
-function readString(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let position = start + 1;
-  let chunkStart = position;
-  let value = "";
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    if (code === 34) {
-      value += body.slice(chunkStart, position);
-      return createToken(lexer, TokenKind.STRING, start, position + 1, value);
-    }
-    if (code === 92) {
-      value += body.slice(chunkStart, position);
-      const escape = body.charCodeAt(position + 1) === 117 ? body.charCodeAt(position + 2) === 123 ? readEscapedUnicodeVariableWidth(lexer, position) : readEscapedUnicodeFixedWidth(lexer, position) : readEscapedCharacter(lexer, position);
-      value += escape.value;
-      position += escape.size;
-      chunkStart = position;
-      continue;
-    }
-    if (code === 10 || code === 13) {
-      break;
-    }
-    if (isUnicodeScalarValue(code)) {
-      ++position;
-    } else if (isSupplementaryCodePoint(body, position)) {
-      position += 2;
-    } else {
-      throw syntaxError(
-        lexer.source,
-        position,
-        `Invalid character within String: ${printCodePointAt(
-          lexer,
-          position
-        )}.`
-      );
-    }
-  }
-  throw syntaxError(lexer.source, position, "Unterminated string.");
-}
-function readEscapedUnicodeVariableWidth(lexer, position) {
-  const body = lexer.source.body;
-  let point = 0;
-  let size = 3;
-  while (size < 12) {
-    const code = body.charCodeAt(position + size++);
-    if (code === 125) {
-      if (size < 5 || !isUnicodeScalarValue(point)) {
-        break;
-      }
-      return {
-        value: String.fromCodePoint(point),
-        size
-      };
-    }
-    point = point << 4 | readHexDigit(code);
-    if (point < 0) {
-      break;
-    }
-  }
-  throw syntaxError(
-    lexer.source,
-    position,
-    `Invalid Unicode escape sequence: "${body.slice(
-      position,
-      position + size
-    )}".`
-  );
-}
-function readEscapedUnicodeFixedWidth(lexer, position) {
-  const body = lexer.source.body;
-  const code = read16BitHexCode(body, position + 2);
-  if (isUnicodeScalarValue(code)) {
-    return {
-      value: String.fromCodePoint(code),
-      size: 6
-    };
-  }
-  if (isLeadingSurrogate(code)) {
-    if (body.charCodeAt(position + 6) === 92 && body.charCodeAt(position + 7) === 117) {
-      const trailingCode = read16BitHexCode(body, position + 8);
-      if (isTrailingSurrogate(trailingCode)) {
-        return {
-          value: String.fromCodePoint(code, trailingCode),
-          size: 12
-        };
-      }
-    }
-  }
-  throw syntaxError(
-    lexer.source,
-    position,
-    `Invalid Unicode escape sequence: "${body.slice(position, position + 6)}".`
-  );
-}
-function read16BitHexCode(body, position) {
-  return readHexDigit(body.charCodeAt(position)) << 12 | readHexDigit(body.charCodeAt(position + 1)) << 8 | readHexDigit(body.charCodeAt(position + 2)) << 4 | readHexDigit(body.charCodeAt(position + 3));
-}
-function readHexDigit(code) {
-  return code >= 48 && code <= 57 ? code - 48 : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
-}
-function readEscapedCharacter(lexer, position) {
-  const body = lexer.source.body;
-  const code = body.charCodeAt(position + 1);
-  switch (code) {
-    case 34:
-      return {
-        value: '"',
-        size: 2
-      };
-    case 92:
-      return {
-        value: "\\",
-        size: 2
-      };
-    case 47:
-      return {
-        value: "/",
-        size: 2
-      };
-    case 98:
-      return {
-        value: "\b",
-        size: 2
-      };
-    case 102:
-      return {
-        value: "\f",
-        size: 2
-      };
-    case 110:
-      return {
-        value: "\n",
-        size: 2
-      };
-    case 114:
-      return {
-        value: "\r",
-        size: 2
-      };
-    case 116:
-      return {
-        value: "	",
-        size: 2
-      };
-  }
-  throw syntaxError(
-    lexer.source,
-    position,
-    `Invalid character escape sequence: "${body.slice(
-      position,
-      position + 2
-    )}".`
-  );
-}
-function readBlockString(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let lineStart = lexer.lineStart;
-  let position = start + 3;
-  let chunkStart = position;
-  let currentLine = "";
-  const blockLines = [];
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    if (code === 34 && body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
-      currentLine += body.slice(chunkStart, position);
-      blockLines.push(currentLine);
-      const token = createToken(
-        lexer,
-        TokenKind.BLOCK_STRING,
-        start,
-        position + 3,
-        // Return a string of the lines joined with U+000A.
-        dedentBlockStringLines(blockLines).join("\n")
-      );
-      lexer.line += blockLines.length - 1;
-      lexer.lineStart = lineStart;
-      return token;
-    }
-    if (code === 92 && body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34 && body.charCodeAt(position + 3) === 34) {
-      currentLine += body.slice(chunkStart, position);
-      chunkStart = position + 1;
-      position += 4;
-      continue;
-    }
-    if (code === 10 || code === 13) {
-      currentLine += body.slice(chunkStart, position);
-      blockLines.push(currentLine);
-      if (code === 13 && body.charCodeAt(position + 1) === 10) {
-        position += 2;
-      } else {
-        ++position;
-      }
-      currentLine = "";
-      chunkStart = position;
-      lineStart = position;
-      continue;
-    }
-    if (isUnicodeScalarValue(code)) {
-      ++position;
-    } else if (isSupplementaryCodePoint(body, position)) {
-      position += 2;
-    } else {
-      throw syntaxError(
-        lexer.source,
-        position,
-        `Invalid character within String: ${printCodePointAt(
-          lexer,
-          position
-        )}.`
-      );
-    }
-  }
-  throw syntaxError(lexer.source, position, "Unterminated string.");
-}
-function readName(lexer, start) {
-  const body = lexer.source.body;
-  const bodyLength = body.length;
-  let position = start + 1;
-  while (position < bodyLength) {
-    const code = body.charCodeAt(position);
-    if (isNameContinue(code)) {
-      ++position;
-    } else {
-      break;
-    }
-  }
-  return createToken(
-    lexer,
-    TokenKind.NAME,
-    start,
-    position,
-    body.slice(start, position)
-  );
-}
-const MAX_ARRAY_LENGTH = 10;
-const MAX_RECURSIVE_DEPTH = 2;
-function inspect(value) {
-  return formatValue(value, []);
-}
-function formatValue(value, seenValues) {
-  switch (typeof value) {
-    case "string":
-      return JSON.stringify(value);
-    case "function":
-      return value.name ? `[function ${value.name}]` : "[function]";
-    case "object":
-      return formatObjectValue(value, seenValues);
-    default:
-      return String(value);
-  }
-}
-function formatObjectValue(value, previouslySeenValues) {
-  if (value === null) {
-    return "null";
-  }
-  if (previouslySeenValues.includes(value)) {
-    return "[Circular]";
-  }
-  const seenValues = [...previouslySeenValues, value];
-  if (isJSONable(value)) {
-    const jsonValue = value.toJSON();
-    if (jsonValue !== value) {
-      return typeof jsonValue === "string" ? jsonValue : formatValue(jsonValue, seenValues);
-    }
-  } else if (Array.isArray(value)) {
-    return formatArray(value, seenValues);
-  }
-  return formatObject(value, seenValues);
-}
-function isJSONable(value) {
-  return typeof value.toJSON === "function";
-}
-function formatObject(object, seenValues) {
-  const entries = Object.entries(object);
-  if (entries.length === 0) {
-    return "{}";
-  }
-  if (seenValues.length > MAX_RECURSIVE_DEPTH) {
-    return "[" + getObjectTag(object) + "]";
-  }
-  const properties = entries.map(
-    ([key, value]) => key + ": " + formatValue(value, seenValues)
-  );
-  return "{ " + properties.join(", ") + " }";
-}
-function formatArray(array, seenValues) {
-  if (array.length === 0) {
-    return "[]";
-  }
-  if (seenValues.length > MAX_RECURSIVE_DEPTH) {
-    return "[Array]";
-  }
-  const len = Math.min(MAX_ARRAY_LENGTH, array.length);
-  const remaining = array.length - len;
-  const items = [];
-  for (let i = 0; i < len; ++i) {
-    items.push(formatValue(array[i], seenValues));
-  }
-  if (remaining === 1) {
-    items.push("... 1 more item");
-  } else if (remaining > 1) {
-    items.push(`... ${remaining} more items`);
-  }
-  return "[" + items.join(", ") + "]";
-}
-function getObjectTag(object) {
-  const tag = Object.prototype.toString.call(object).replace(/^\[object /, "").replace(/]$/, "");
-  if (tag === "Object" && typeof object.constructor === "function") {
-    const name = object.constructor.name;
-    if (typeof name === "string" && name !== "") {
-      return name;
-    }
-  }
-  return tag;
-}
-const isProduction = globalThis.process && // eslint-disable-next-line no-undef
-process.env.NODE_ENV === "production";
-const instanceOf = (
-  /* c8 ignore next 6 */
-  // FIXME: https://github.com/graphql/graphql-js/issues/2317
-  isProduction ? function instanceOf2(value, constructor) {
-    return value instanceof constructor;
-  } : function instanceOf3(value, constructor) {
-    if (value instanceof constructor) {
-      return true;
-    }
-    if (typeof value === "object" && value !== null) {
-      var _value$constructor;
-      const className = constructor.prototype[Symbol.toStringTag];
-      const valueClassName = (
-        // We still need to support constructor's name to detect conflicts with older versions of this library.
-        Symbol.toStringTag in value ? value[Symbol.toStringTag] : (_value$constructor = value.constructor) === null || _value$constructor === void 0 ? void 0 : _value$constructor.name
-      );
-      if (className === valueClassName) {
-        const stringifiedValue = inspect(value);
-        throw new Error(`Cannot use ${className} "${stringifiedValue}" from another module or realm.
-
-Ensure that there is only one instance of "graphql" in the node_modules
-directory. If different versions of "graphql" are the dependencies of other
-relied on modules, use "resolutions" to ensure only one version is installed.
-
-https://yarnpkg.com/en/docs/selective-version-resolutions
-
-Duplicate "graphql" modules cannot be used at the same time since different
-versions may have different capabilities and behavior. The data from one
-version used in the function from another could produce confusing and
-spurious results.`);
-      }
-    }
-    return false;
-  }
-);
-class Source {
-  constructor(body, name = "GraphQL request", locationOffset = {
-    line: 1,
-    column: 1
-  }) {
-    typeof body === "string" || devAssert(false, `Body must be a string. Received: ${inspect(body)}.`);
-    this.body = body;
-    this.name = name;
-    this.locationOffset = locationOffset;
-    this.locationOffset.line > 0 || devAssert(
-      false,
-      "line in locationOffset is 1-indexed and must be positive."
-    );
-    this.locationOffset.column > 0 || devAssert(
-      false,
-      "column in locationOffset is 1-indexed and must be positive."
-    );
-  }
-  get [Symbol.toStringTag]() {
-    return "Source";
-  }
-}
-function isSource(source) {
-  return instanceOf(source, Source);
-}
-function parse(source, options) {
-  const parser = new Parser(source, options);
-  const document2 = parser.parseDocument();
-  Object.defineProperty(document2, "tokenCount", {
-    enumerable: false,
-    value: parser.tokenCount
-  });
-  return document2;
-}
-class Parser {
-  constructor(source, options = {}) {
-    const { lexer, ..._options } = options;
-    if (lexer) {
-      this._lexer = lexer;
-    } else {
-      const sourceObj = isSource(source) ? source : new Source(source);
-      this._lexer = new Lexer(sourceObj);
-    }
-    this._options = _options;
-    this._tokenCounter = 0;
-  }
-  get tokenCount() {
-    return this._tokenCounter;
-  }
-  /**
-   * Converts a name lex token into a name parse node.
-   */
-  parseName() {
-    const token = this.expectToken(TokenKind.NAME);
-    return this.node(token, {
-      kind: Kind.NAME,
-      value: token.value
-    });
-  }
-  // Implements the parsing rules in the Document section.
-  /**
-   * Document : Definition+
-   */
-  parseDocument() {
-    return this.node(this._lexer.token, {
-      kind: Kind.DOCUMENT,
-      definitions: this.many(
-        TokenKind.SOF,
-        this.parseDefinition,
-        TokenKind.EOF
-      )
-    });
-  }
-  /**
-   * Definition :
-   *   - ExecutableDefinition
-   *   - TypeSystemDefinition
-   *   - TypeSystemExtension
-   *
-   * ExecutableDefinition :
-   *   - OperationDefinition
-   *   - FragmentDefinition
-   *
-   * TypeSystemDefinition :
-   *   - SchemaDefinition
-   *   - TypeDefinition
-   *   - DirectiveDefinition
-   *
-   * TypeDefinition :
-   *   - ScalarTypeDefinition
-   *   - ObjectTypeDefinition
-   *   - InterfaceTypeDefinition
-   *   - UnionTypeDefinition
-   *   - EnumTypeDefinition
-   *   - InputObjectTypeDefinition
-   */
-  parseDefinition() {
-    if (this.peek(TokenKind.BRACE_L)) {
-      return this.parseOperationDefinition();
-    }
-    const hasDescription = this.peekDescription();
-    const keywordToken = hasDescription ? this._lexer.lookahead() : this._lexer.token;
-    if (hasDescription && keywordToken.kind === TokenKind.BRACE_L) {
-      throw syntaxError(
-        this._lexer.source,
-        this._lexer.token.start,
-        "Unexpected description, descriptions are not supported on shorthand queries."
-      );
-    }
-    if (keywordToken.kind === TokenKind.NAME) {
-      switch (keywordToken.value) {
-        case "schema":
-          return this.parseSchemaDefinition();
-        case "scalar":
-          return this.parseScalarTypeDefinition();
-        case "type":
-          return this.parseObjectTypeDefinition();
-        case "interface":
-          return this.parseInterfaceTypeDefinition();
-        case "union":
-          return this.parseUnionTypeDefinition();
-        case "enum":
-          return this.parseEnumTypeDefinition();
-        case "input":
-          return this.parseInputObjectTypeDefinition();
-        case "directive":
-          return this.parseDirectiveDefinition();
-      }
-      switch (keywordToken.value) {
-        case "query":
-        case "mutation":
-        case "subscription":
-          return this.parseOperationDefinition();
-        case "fragment":
-          return this.parseFragmentDefinition();
-      }
-      if (hasDescription) {
-        throw syntaxError(
-          this._lexer.source,
-          this._lexer.token.start,
-          "Unexpected description, only GraphQL definitions support descriptions."
-        );
-      }
-      switch (keywordToken.value) {
-        case "extend":
-          return this.parseTypeSystemExtension();
-      }
-    }
-    throw this.unexpected(keywordToken);
-  }
-  // Implements the parsing rules in the Operations section.
-  /**
-   * OperationDefinition :
-   *  - SelectionSet
-   *  - OperationType Name? VariableDefinitions? Directives? SelectionSet
-   */
-  parseOperationDefinition() {
-    const start = this._lexer.token;
-    if (this.peek(TokenKind.BRACE_L)) {
-      return this.node(start, {
-        kind: Kind.OPERATION_DEFINITION,
-        operation: OperationTypeNode.QUERY,
-        description: void 0,
-        name: void 0,
-        variableDefinitions: [],
-        directives: [],
-        selectionSet: this.parseSelectionSet()
-      });
-    }
-    const description = this.parseDescription();
-    const operation = this.parseOperationType();
-    let name;
-    if (this.peek(TokenKind.NAME)) {
-      name = this.parseName();
-    }
-    return this.node(start, {
-      kind: Kind.OPERATION_DEFINITION,
-      operation,
-      description,
-      name,
-      variableDefinitions: this.parseVariableDefinitions(),
-      directives: this.parseDirectives(false),
-      selectionSet: this.parseSelectionSet()
-    });
-  }
-  /**
-   * OperationType : one of query mutation subscription
-   */
-  parseOperationType() {
-    const operationToken = this.expectToken(TokenKind.NAME);
-    switch (operationToken.value) {
-      case "query":
-        return OperationTypeNode.QUERY;
-      case "mutation":
-        return OperationTypeNode.MUTATION;
-      case "subscription":
-        return OperationTypeNode.SUBSCRIPTION;
-    }
-    throw this.unexpected(operationToken);
-  }
-  /**
-   * VariableDefinitions : ( VariableDefinition+ )
-   */
-  parseVariableDefinitions() {
-    return this.optionalMany(
-      TokenKind.PAREN_L,
-      this.parseVariableDefinition,
-      TokenKind.PAREN_R
-    );
-  }
-  /**
-   * VariableDefinition : Variable : Type DefaultValue? Directives[Const]?
-   */
-  parseVariableDefinition() {
-    return this.node(this._lexer.token, {
-      kind: Kind.VARIABLE_DEFINITION,
-      description: this.parseDescription(),
-      variable: this.parseVariable(),
-      type: (this.expectToken(TokenKind.COLON), this.parseTypeReference()),
-      defaultValue: this.expectOptionalToken(TokenKind.EQUALS) ? this.parseConstValueLiteral() : void 0,
-      directives: this.parseConstDirectives()
-    });
-  }
-  /**
-   * Variable : $ Name
-   */
-  parseVariable() {
-    const start = this._lexer.token;
-    this.expectToken(TokenKind.DOLLAR);
-    return this.node(start, {
-      kind: Kind.VARIABLE,
-      name: this.parseName()
-    });
-  }
-  /**
-   * ```
-   * SelectionSet : { Selection+ }
-   * ```
-   */
-  parseSelectionSet() {
-    return this.node(this._lexer.token, {
-      kind: Kind.SELECTION_SET,
-      selections: this.many(
-        TokenKind.BRACE_L,
-        this.parseSelection,
-        TokenKind.BRACE_R
-      )
-    });
-  }
-  /**
-   * Selection :
-   *   - Field
-   *   - FragmentSpread
-   *   - InlineFragment
-   */
-  parseSelection() {
-    return this.peek(TokenKind.SPREAD) ? this.parseFragment() : this.parseField();
-  }
-  /**
-   * Field : Alias? Name Arguments? Directives? SelectionSet?
-   *
-   * Alias : Name :
-   */
-  parseField() {
-    const start = this._lexer.token;
-    const nameOrAlias = this.parseName();
-    let alias;
-    let name;
-    if (this.expectOptionalToken(TokenKind.COLON)) {
-      alias = nameOrAlias;
-      name = this.parseName();
-    } else {
-      name = nameOrAlias;
-    }
-    return this.node(start, {
-      kind: Kind.FIELD,
-      alias,
-      name,
-      arguments: this.parseArguments(false),
-      directives: this.parseDirectives(false),
-      selectionSet: this.peek(TokenKind.BRACE_L) ? this.parseSelectionSet() : void 0
-    });
-  }
-  /**
-   * Arguments[Const] : ( Argument[?Const]+ )
-   */
-  parseArguments(isConst) {
-    const item = isConst ? this.parseConstArgument : this.parseArgument;
-    return this.optionalMany(TokenKind.PAREN_L, item, TokenKind.PAREN_R);
-  }
-  /**
-   * Argument[Const] : Name : Value[?Const]
-   */
-  parseArgument(isConst = false) {
-    const start = this._lexer.token;
-    const name = this.parseName();
-    this.expectToken(TokenKind.COLON);
-    return this.node(start, {
-      kind: Kind.ARGUMENT,
-      name,
-      value: this.parseValueLiteral(isConst)
-    });
-  }
-  parseConstArgument() {
-    return this.parseArgument(true);
-  }
-  // Implements the parsing rules in the Fragments section.
-  /**
-   * Corresponds to both FragmentSpread and InlineFragment in the spec.
-   *
-   * FragmentSpread : ... FragmentName Directives?
-   *
-   * InlineFragment : ... TypeCondition? Directives? SelectionSet
-   */
-  parseFragment() {
-    const start = this._lexer.token;
-    this.expectToken(TokenKind.SPREAD);
-    const hasTypeCondition = this.expectOptionalKeyword("on");
-    if (!hasTypeCondition && this.peek(TokenKind.NAME)) {
-      return this.node(start, {
-        kind: Kind.FRAGMENT_SPREAD,
-        name: this.parseFragmentName(),
-        directives: this.parseDirectives(false)
-      });
-    }
-    return this.node(start, {
-      kind: Kind.INLINE_FRAGMENT,
-      typeCondition: hasTypeCondition ? this.parseNamedType() : void 0,
-      directives: this.parseDirectives(false),
-      selectionSet: this.parseSelectionSet()
-    });
-  }
-  /**
-   * FragmentDefinition :
-   *   - fragment FragmentName on TypeCondition Directives? SelectionSet
-   *
-   * TypeCondition : NamedType
-   */
-  parseFragmentDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("fragment");
-    if (this._options.allowLegacyFragmentVariables === true) {
-      return this.node(start, {
-        kind: Kind.FRAGMENT_DEFINITION,
-        description,
-        name: this.parseFragmentName(),
-        variableDefinitions: this.parseVariableDefinitions(),
-        typeCondition: (this.expectKeyword("on"), this.parseNamedType()),
-        directives: this.parseDirectives(false),
-        selectionSet: this.parseSelectionSet()
-      });
-    }
-    return this.node(start, {
-      kind: Kind.FRAGMENT_DEFINITION,
-      description,
-      name: this.parseFragmentName(),
-      typeCondition: (this.expectKeyword("on"), this.parseNamedType()),
-      directives: this.parseDirectives(false),
-      selectionSet: this.parseSelectionSet()
-    });
-  }
-  /**
-   * FragmentName : Name but not `on`
-   */
-  parseFragmentName() {
-    if (this._lexer.token.value === "on") {
-      throw this.unexpected();
-    }
-    return this.parseName();
-  }
-  // Implements the parsing rules in the Values section.
-  /**
-   * Value[Const] :
-   *   - [~Const] Variable
-   *   - IntValue
-   *   - FloatValue
-   *   - StringValue
-   *   - BooleanValue
-   *   - NullValue
-   *   - EnumValue
-   *   - ListValue[?Const]
-   *   - ObjectValue[?Const]
-   *
-   * BooleanValue : one of `true` `false`
-   *
-   * NullValue : `null`
-   *
-   * EnumValue : Name but not `true`, `false` or `null`
-   */
-  parseValueLiteral(isConst) {
-    const token = this._lexer.token;
-    switch (token.kind) {
-      case TokenKind.BRACKET_L:
-        return this.parseList(isConst);
-      case TokenKind.BRACE_L:
-        return this.parseObject(isConst);
-      case TokenKind.INT:
-        this.advanceLexer();
-        return this.node(token, {
-          kind: Kind.INT,
-          value: token.value
-        });
-      case TokenKind.FLOAT:
-        this.advanceLexer();
-        return this.node(token, {
-          kind: Kind.FLOAT,
-          value: token.value
-        });
-      case TokenKind.STRING:
-      case TokenKind.BLOCK_STRING:
-        return this.parseStringLiteral();
-      case TokenKind.NAME:
-        this.advanceLexer();
-        switch (token.value) {
-          case "true":
-            return this.node(token, {
-              kind: Kind.BOOLEAN,
-              value: true
-            });
-          case "false":
-            return this.node(token, {
-              kind: Kind.BOOLEAN,
-              value: false
-            });
-          case "null":
-            return this.node(token, {
-              kind: Kind.NULL
-            });
-          default:
-            return this.node(token, {
-              kind: Kind.ENUM,
-              value: token.value
-            });
-        }
-      case TokenKind.DOLLAR:
-        if (isConst) {
-          this.expectToken(TokenKind.DOLLAR);
-          if (this._lexer.token.kind === TokenKind.NAME) {
-            const varName = this._lexer.token.value;
-            throw syntaxError(
-              this._lexer.source,
-              token.start,
-              `Unexpected variable "$${varName}" in constant value.`
-            );
-          } else {
-            throw this.unexpected(token);
-          }
-        }
-        return this.parseVariable();
-      default:
-        throw this.unexpected();
-    }
-  }
-  parseConstValueLiteral() {
-    return this.parseValueLiteral(true);
-  }
-  parseStringLiteral() {
-    const token = this._lexer.token;
-    this.advanceLexer();
-    return this.node(token, {
-      kind: Kind.STRING,
-      value: token.value,
-      block: token.kind === TokenKind.BLOCK_STRING
-    });
-  }
-  /**
-   * ListValue[Const] :
-   *   - [ ]
-   *   - [ Value[?Const]+ ]
-   */
-  parseList(isConst) {
-    const item = () => this.parseValueLiteral(isConst);
-    return this.node(this._lexer.token, {
-      kind: Kind.LIST,
-      values: this.any(TokenKind.BRACKET_L, item, TokenKind.BRACKET_R)
-    });
-  }
-  /**
-   * ```
-   * ObjectValue[Const] :
-   *   - { }
-   *   - { ObjectField[?Const]+ }
-   * ```
-   */
-  parseObject(isConst) {
-    const item = () => this.parseObjectField(isConst);
-    return this.node(this._lexer.token, {
-      kind: Kind.OBJECT,
-      fields: this.any(TokenKind.BRACE_L, item, TokenKind.BRACE_R)
-    });
-  }
-  /**
-   * ObjectField[Const] : Name : Value[?Const]
-   */
-  parseObjectField(isConst) {
-    const start = this._lexer.token;
-    const name = this.parseName();
-    this.expectToken(TokenKind.COLON);
-    return this.node(start, {
-      kind: Kind.OBJECT_FIELD,
-      name,
-      value: this.parseValueLiteral(isConst)
-    });
-  }
-  // Implements the parsing rules in the Directives section.
-  /**
-   * Directives[Const] : Directive[?Const]+
-   */
-  parseDirectives(isConst) {
-    const directives = [];
-    while (this.peek(TokenKind.AT)) {
-      directives.push(this.parseDirective(isConst));
-    }
-    return directives;
-  }
-  parseConstDirectives() {
-    return this.parseDirectives(true);
-  }
-  /**
-   * ```
-   * Directive[Const] : @ Name Arguments[?Const]?
-   * ```
-   */
-  parseDirective(isConst) {
-    const start = this._lexer.token;
-    this.expectToken(TokenKind.AT);
-    return this.node(start, {
-      kind: Kind.DIRECTIVE,
-      name: this.parseName(),
-      arguments: this.parseArguments(isConst)
-    });
-  }
-  // Implements the parsing rules in the Types section.
-  /**
-   * Type :
-   *   - NamedType
-   *   - ListType
-   *   - NonNullType
-   */
-  parseTypeReference() {
-    const start = this._lexer.token;
-    let type2;
-    if (this.expectOptionalToken(TokenKind.BRACKET_L)) {
-      const innerType = this.parseTypeReference();
-      this.expectToken(TokenKind.BRACKET_R);
-      type2 = this.node(start, {
-        kind: Kind.LIST_TYPE,
-        type: innerType
-      });
-    } else {
-      type2 = this.parseNamedType();
-    }
-    if (this.expectOptionalToken(TokenKind.BANG)) {
-      return this.node(start, {
-        kind: Kind.NON_NULL_TYPE,
-        type: type2
-      });
-    }
-    return type2;
-  }
-  /**
-   * NamedType : Name
-   */
-  parseNamedType() {
-    return this.node(this._lexer.token, {
-      kind: Kind.NAMED_TYPE,
-      name: this.parseName()
-    });
-  }
-  // Implements the parsing rules in the Type Definition section.
-  peekDescription() {
-    return this.peek(TokenKind.STRING) || this.peek(TokenKind.BLOCK_STRING);
-  }
-  /**
-   * Description : StringValue
-   */
-  parseDescription() {
-    if (this.peekDescription()) {
-      return this.parseStringLiteral();
-    }
-  }
-  /**
-   * ```
-   * SchemaDefinition : Description? schema Directives[Const]? { OperationTypeDefinition+ }
-   * ```
-   */
-  parseSchemaDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("schema");
-    const directives = this.parseConstDirectives();
-    const operationTypes = this.many(
-      TokenKind.BRACE_L,
-      this.parseOperationTypeDefinition,
-      TokenKind.BRACE_R
-    );
-    return this.node(start, {
-      kind: Kind.SCHEMA_DEFINITION,
-      description,
-      directives,
-      operationTypes
-    });
-  }
-  /**
-   * OperationTypeDefinition : OperationType : NamedType
-   */
-  parseOperationTypeDefinition() {
-    const start = this._lexer.token;
-    const operation = this.parseOperationType();
-    this.expectToken(TokenKind.COLON);
-    const type2 = this.parseNamedType();
-    return this.node(start, {
-      kind: Kind.OPERATION_TYPE_DEFINITION,
-      operation,
-      type: type2
-    });
-  }
-  /**
-   * ScalarTypeDefinition : Description? scalar Name Directives[Const]?
-   */
-  parseScalarTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("scalar");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    return this.node(start, {
-      kind: Kind.SCALAR_TYPE_DEFINITION,
-      description,
-      name,
-      directives
-    });
-  }
-  /**
-   * ObjectTypeDefinition :
-   *   Description?
-   *   type Name ImplementsInterfaces? Directives[Const]? FieldsDefinition?
-   */
-  parseObjectTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("type");
-    const name = this.parseName();
-    const interfaces = this.parseImplementsInterfaces();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseFieldsDefinition();
-    return this.node(start, {
-      kind: Kind.OBJECT_TYPE_DEFINITION,
-      description,
-      name,
-      interfaces,
-      directives,
-      fields
-    });
-  }
-  /**
-   * ImplementsInterfaces :
-   *   - implements `&`? NamedType
-   *   - ImplementsInterfaces & NamedType
-   */
-  parseImplementsInterfaces() {
-    return this.expectOptionalKeyword("implements") ? this.delimitedMany(TokenKind.AMP, this.parseNamedType) : [];
-  }
-  /**
-   * ```
-   * FieldsDefinition : { FieldDefinition+ }
-   * ```
-   */
-  parseFieldsDefinition() {
-    return this.optionalMany(
-      TokenKind.BRACE_L,
-      this.parseFieldDefinition,
-      TokenKind.BRACE_R
-    );
-  }
-  /**
-   * FieldDefinition :
-   *   - Description? Name ArgumentsDefinition? : Type Directives[Const]?
-   */
-  parseFieldDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    const name = this.parseName();
-    const args = this.parseArgumentDefs();
-    this.expectToken(TokenKind.COLON);
-    const type2 = this.parseTypeReference();
-    const directives = this.parseConstDirectives();
-    return this.node(start, {
-      kind: Kind.FIELD_DEFINITION,
-      description,
-      name,
-      arguments: args,
-      type: type2,
-      directives
-    });
-  }
-  /**
-   * ArgumentsDefinition : ( InputValueDefinition+ )
-   */
-  parseArgumentDefs() {
-    return this.optionalMany(
-      TokenKind.PAREN_L,
-      this.parseInputValueDef,
-      TokenKind.PAREN_R
-    );
-  }
-  /**
-   * InputValueDefinition :
-   *   - Description? Name : Type DefaultValue? Directives[Const]?
-   */
-  parseInputValueDef() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    const name = this.parseName();
-    this.expectToken(TokenKind.COLON);
-    const type2 = this.parseTypeReference();
-    let defaultValue;
-    if (this.expectOptionalToken(TokenKind.EQUALS)) {
-      defaultValue = this.parseConstValueLiteral();
-    }
-    const directives = this.parseConstDirectives();
-    return this.node(start, {
-      kind: Kind.INPUT_VALUE_DEFINITION,
-      description,
-      name,
-      type: type2,
-      defaultValue,
-      directives
-    });
-  }
-  /**
-   * InterfaceTypeDefinition :
-   *   - Description? interface Name Directives[Const]? FieldsDefinition?
-   */
-  parseInterfaceTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("interface");
-    const name = this.parseName();
-    const interfaces = this.parseImplementsInterfaces();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseFieldsDefinition();
-    return this.node(start, {
-      kind: Kind.INTERFACE_TYPE_DEFINITION,
-      description,
-      name,
-      interfaces,
-      directives,
-      fields
-    });
-  }
-  /**
-   * UnionTypeDefinition :
-   *   - Description? union Name Directives[Const]? UnionMemberTypes?
-   */
-  parseUnionTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("union");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const types = this.parseUnionMemberTypes();
-    return this.node(start, {
-      kind: Kind.UNION_TYPE_DEFINITION,
-      description,
-      name,
-      directives,
-      types
-    });
-  }
-  /**
-   * UnionMemberTypes :
-   *   - = `|`? NamedType
-   *   - UnionMemberTypes | NamedType
-   */
-  parseUnionMemberTypes() {
-    return this.expectOptionalToken(TokenKind.EQUALS) ? this.delimitedMany(TokenKind.PIPE, this.parseNamedType) : [];
-  }
-  /**
-   * EnumTypeDefinition :
-   *   - Description? enum Name Directives[Const]? EnumValuesDefinition?
-   */
-  parseEnumTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("enum");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const values = this.parseEnumValuesDefinition();
-    return this.node(start, {
-      kind: Kind.ENUM_TYPE_DEFINITION,
-      description,
-      name,
-      directives,
-      values
-    });
-  }
-  /**
-   * ```
-   * EnumValuesDefinition : { EnumValueDefinition+ }
-   * ```
-   */
-  parseEnumValuesDefinition() {
-    return this.optionalMany(
-      TokenKind.BRACE_L,
-      this.parseEnumValueDefinition,
-      TokenKind.BRACE_R
-    );
-  }
-  /**
-   * EnumValueDefinition : Description? EnumValue Directives[Const]?
-   */
-  parseEnumValueDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    const name = this.parseEnumValueName();
-    const directives = this.parseConstDirectives();
-    return this.node(start, {
-      kind: Kind.ENUM_VALUE_DEFINITION,
-      description,
-      name,
-      directives
-    });
-  }
-  /**
-   * EnumValue : Name but not `true`, `false` or `null`
-   */
-  parseEnumValueName() {
-    if (this._lexer.token.value === "true" || this._lexer.token.value === "false" || this._lexer.token.value === "null") {
-      throw syntaxError(
-        this._lexer.source,
-        this._lexer.token.start,
-        `${getTokenDesc(
-          this._lexer.token
-        )} is reserved and cannot be used for an enum value.`
-      );
-    }
-    return this.parseName();
-  }
-  /**
-   * InputObjectTypeDefinition :
-   *   - Description? input Name Directives[Const]? InputFieldsDefinition?
-   */
-  parseInputObjectTypeDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("input");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseInputFieldsDefinition();
-    return this.node(start, {
-      kind: Kind.INPUT_OBJECT_TYPE_DEFINITION,
-      description,
-      name,
-      directives,
-      fields
-    });
-  }
-  /**
-   * ```
-   * InputFieldsDefinition : { InputValueDefinition+ }
-   * ```
-   */
-  parseInputFieldsDefinition() {
-    return this.optionalMany(
-      TokenKind.BRACE_L,
-      this.parseInputValueDef,
-      TokenKind.BRACE_R
-    );
-  }
-  /**
-   * TypeSystemExtension :
-   *   - SchemaExtension
-   *   - TypeExtension
-   *
-   * TypeExtension :
-   *   - ScalarTypeExtension
-   *   - ObjectTypeExtension
-   *   - InterfaceTypeExtension
-   *   - UnionTypeExtension
-   *   - EnumTypeExtension
-   *   - InputObjectTypeDefinition
-   */
-  parseTypeSystemExtension() {
-    const keywordToken = this._lexer.lookahead();
-    if (keywordToken.kind === TokenKind.NAME) {
-      switch (keywordToken.value) {
-        case "schema":
-          return this.parseSchemaExtension();
-        case "scalar":
-          return this.parseScalarTypeExtension();
-        case "type":
-          return this.parseObjectTypeExtension();
-        case "interface":
-          return this.parseInterfaceTypeExtension();
-        case "union":
-          return this.parseUnionTypeExtension();
-        case "enum":
-          return this.parseEnumTypeExtension();
-        case "input":
-          return this.parseInputObjectTypeExtension();
-      }
-    }
-    throw this.unexpected(keywordToken);
-  }
-  /**
-   * ```
-   * SchemaExtension :
-   *  - extend schema Directives[Const]? { OperationTypeDefinition+ }
-   *  - extend schema Directives[Const]
-   * ```
-   */
-  parseSchemaExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("schema");
-    const directives = this.parseConstDirectives();
-    const operationTypes = this.optionalMany(
-      TokenKind.BRACE_L,
-      this.parseOperationTypeDefinition,
-      TokenKind.BRACE_R
-    );
-    if (directives.length === 0 && operationTypes.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.SCHEMA_EXTENSION,
-      directives,
-      operationTypes
-    });
-  }
-  /**
-   * ScalarTypeExtension :
-   *   - extend scalar Name Directives[Const]
-   */
-  parseScalarTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("scalar");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    if (directives.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.SCALAR_TYPE_EXTENSION,
-      name,
-      directives
-    });
-  }
-  /**
-   * ObjectTypeExtension :
-   *  - extend type Name ImplementsInterfaces? Directives[Const]? FieldsDefinition
-   *  - extend type Name ImplementsInterfaces? Directives[Const]
-   *  - extend type Name ImplementsInterfaces
-   */
-  parseObjectTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("type");
-    const name = this.parseName();
-    const interfaces = this.parseImplementsInterfaces();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseFieldsDefinition();
-    if (interfaces.length === 0 && directives.length === 0 && fields.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.OBJECT_TYPE_EXTENSION,
-      name,
-      interfaces,
-      directives,
-      fields
-    });
-  }
-  /**
-   * InterfaceTypeExtension :
-   *  - extend interface Name ImplementsInterfaces? Directives[Const]? FieldsDefinition
-   *  - extend interface Name ImplementsInterfaces? Directives[Const]
-   *  - extend interface Name ImplementsInterfaces
-   */
-  parseInterfaceTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("interface");
-    const name = this.parseName();
-    const interfaces = this.parseImplementsInterfaces();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseFieldsDefinition();
-    if (interfaces.length === 0 && directives.length === 0 && fields.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.INTERFACE_TYPE_EXTENSION,
-      name,
-      interfaces,
-      directives,
-      fields
-    });
-  }
-  /**
-   * UnionTypeExtension :
-   *   - extend union Name Directives[Const]? UnionMemberTypes
-   *   - extend union Name Directives[Const]
-   */
-  parseUnionTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("union");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const types = this.parseUnionMemberTypes();
-    if (directives.length === 0 && types.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.UNION_TYPE_EXTENSION,
-      name,
-      directives,
-      types
-    });
-  }
-  /**
-   * EnumTypeExtension :
-   *   - extend enum Name Directives[Const]? EnumValuesDefinition
-   *   - extend enum Name Directives[Const]
-   */
-  parseEnumTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("enum");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const values = this.parseEnumValuesDefinition();
-    if (directives.length === 0 && values.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.ENUM_TYPE_EXTENSION,
-      name,
-      directives,
-      values
-    });
-  }
-  /**
-   * InputObjectTypeExtension :
-   *   - extend input Name Directives[Const]? InputFieldsDefinition
-   *   - extend input Name Directives[Const]
-   */
-  parseInputObjectTypeExtension() {
-    const start = this._lexer.token;
-    this.expectKeyword("extend");
-    this.expectKeyword("input");
-    const name = this.parseName();
-    const directives = this.parseConstDirectives();
-    const fields = this.parseInputFieldsDefinition();
-    if (directives.length === 0 && fields.length === 0) {
-      throw this.unexpected();
-    }
-    return this.node(start, {
-      kind: Kind.INPUT_OBJECT_TYPE_EXTENSION,
-      name,
-      directives,
-      fields
-    });
-  }
-  /**
-   * ```
-   * DirectiveDefinition :
-   *   - Description? directive @ Name ArgumentsDefinition? `repeatable`? on DirectiveLocations
-   * ```
-   */
-  parseDirectiveDefinition() {
-    const start = this._lexer.token;
-    const description = this.parseDescription();
-    this.expectKeyword("directive");
-    this.expectToken(TokenKind.AT);
-    const name = this.parseName();
-    const args = this.parseArgumentDefs();
-    const repeatable = this.expectOptionalKeyword("repeatable");
-    this.expectKeyword("on");
-    const locations = this.parseDirectiveLocations();
-    return this.node(start, {
-      kind: Kind.DIRECTIVE_DEFINITION,
-      description,
-      name,
-      arguments: args,
-      repeatable,
-      locations
-    });
-  }
-  /**
-   * DirectiveLocations :
-   *   - `|`? DirectiveLocation
-   *   - DirectiveLocations | DirectiveLocation
-   */
-  parseDirectiveLocations() {
-    return this.delimitedMany(TokenKind.PIPE, this.parseDirectiveLocation);
-  }
-  /*
-   * DirectiveLocation :
-   *   - ExecutableDirectiveLocation
-   *   - TypeSystemDirectiveLocation
-   *
-   * ExecutableDirectiveLocation : one of
-   *   `QUERY`
-   *   `MUTATION`
-   *   `SUBSCRIPTION`
-   *   `FIELD`
-   *   `FRAGMENT_DEFINITION`
-   *   `FRAGMENT_SPREAD`
-   *   `INLINE_FRAGMENT`
-   *
-   * TypeSystemDirectiveLocation : one of
-   *   `SCHEMA`
-   *   `SCALAR`
-   *   `OBJECT`
-   *   `FIELD_DEFINITION`
-   *   `ARGUMENT_DEFINITION`
-   *   `INTERFACE`
-   *   `UNION`
-   *   `ENUM`
-   *   `ENUM_VALUE`
-   *   `INPUT_OBJECT`
-   *   `INPUT_FIELD_DEFINITION`
-   */
-  parseDirectiveLocation() {
-    const start = this._lexer.token;
-    const name = this.parseName();
-    if (Object.prototype.hasOwnProperty.call(DirectiveLocation, name.value)) {
-      return name;
-    }
-    throw this.unexpected(start);
-  }
-  // Schema Coordinates
-  /**
-   * SchemaCoordinate :
-   *   - Name
-   *   - Name . Name
-   *   - Name . Name ( Name : )
-   *   - \@ Name
-   *   - \@ Name ( Name : )
-   */
-  parseSchemaCoordinate() {
-    const start = this._lexer.token;
-    const ofDirective = this.expectOptionalToken(TokenKind.AT);
-    const name = this.parseName();
-    let memberName;
-    if (!ofDirective && this.expectOptionalToken(TokenKind.DOT)) {
-      memberName = this.parseName();
-    }
-    let argumentName;
-    if ((ofDirective || memberName) && this.expectOptionalToken(TokenKind.PAREN_L)) {
-      argumentName = this.parseName();
-      this.expectToken(TokenKind.COLON);
-      this.expectToken(TokenKind.PAREN_R);
-    }
-    if (ofDirective) {
-      if (argumentName) {
-        return this.node(start, {
-          kind: Kind.DIRECTIVE_ARGUMENT_COORDINATE,
-          name,
-          argumentName
-        });
-      }
-      return this.node(start, {
-        kind: Kind.DIRECTIVE_COORDINATE,
-        name
-      });
-    } else if (memberName) {
-      if (argumentName) {
-        return this.node(start, {
-          kind: Kind.ARGUMENT_COORDINATE,
-          name,
-          fieldName: memberName,
-          argumentName
-        });
-      }
-      return this.node(start, {
-        kind: Kind.MEMBER_COORDINATE,
-        name,
-        memberName
-      });
-    }
-    return this.node(start, {
-      kind: Kind.TYPE_COORDINATE,
-      name
-    });
-  }
-  // Core parsing utility functions
-  /**
-   * Returns a node that, if configured to do so, sets a "loc" field as a
-   * location object, used to identify the place in the source that created a
-   * given parsed object.
-   */
-  node(startToken, node2) {
-    if (this._options.noLocation !== true) {
-      node2.loc = new Location(
-        startToken,
-        this._lexer.lastToken,
-        this._lexer.source
-      );
-    }
-    return node2;
-  }
-  /**
-   * Determines if the next token is of a given kind
-   */
-  peek(kind) {
-    return this._lexer.token.kind === kind;
-  }
-  /**
-   * If the next token is of the given kind, return that token after advancing the lexer.
-   * Otherwise, do not change the parser state and throw an error.
-   */
-  expectToken(kind) {
-    const token = this._lexer.token;
-    if (token.kind === kind) {
-      this.advanceLexer();
-      return token;
-    }
-    throw syntaxError(
-      this._lexer.source,
-      token.start,
-      `Expected ${getTokenKindDesc(kind)}, found ${getTokenDesc(token)}.`
-    );
-  }
-  /**
-   * If the next token is of the given kind, return "true" after advancing the lexer.
-   * Otherwise, do not change the parser state and return "false".
-   */
-  expectOptionalToken(kind) {
-    const token = this._lexer.token;
-    if (token.kind === kind) {
-      this.advanceLexer();
-      return true;
-    }
-    return false;
-  }
-  /**
-   * If the next token is a given keyword, advance the lexer.
-   * Otherwise, do not change the parser state and throw an error.
-   */
-  expectKeyword(value) {
-    const token = this._lexer.token;
-    if (token.kind === TokenKind.NAME && token.value === value) {
-      this.advanceLexer();
-    } else {
-      throw syntaxError(
-        this._lexer.source,
-        token.start,
-        `Expected "${value}", found ${getTokenDesc(token)}.`
-      );
-    }
-  }
-  /**
-   * If the next token is a given keyword, return "true" after advancing the lexer.
-   * Otherwise, do not change the parser state and return "false".
-   */
-  expectOptionalKeyword(value) {
-    const token = this._lexer.token;
-    if (token.kind === TokenKind.NAME && token.value === value) {
-      this.advanceLexer();
-      return true;
-    }
-    return false;
-  }
-  /**
-   * Helper function for creating an error when an unexpected lexed token is encountered.
-   */
-  unexpected(atToken) {
-    const token = atToken !== null && atToken !== void 0 ? atToken : this._lexer.token;
-    return syntaxError(
-      this._lexer.source,
-      token.start,
-      `Unexpected ${getTokenDesc(token)}.`
-    );
-  }
-  /**
-   * Returns a possibly empty list of parse nodes, determined by the parseFn.
-   * This list begins with a lex token of openKind and ends with a lex token of closeKind.
-   * Advances the parser to the next lex token after the closing token.
-   */
-  any(openKind, parseFn, closeKind) {
-    this.expectToken(openKind);
-    const nodes = [];
-    while (!this.expectOptionalToken(closeKind)) {
-      nodes.push(parseFn.call(this));
-    }
-    return nodes;
-  }
-  /**
-   * Returns a list of parse nodes, determined by the parseFn.
-   * It can be empty only if open token is missing otherwise it will always return non-empty list
-   * that begins with a lex token of openKind and ends with a lex token of closeKind.
-   * Advances the parser to the next lex token after the closing token.
-   */
-  optionalMany(openKind, parseFn, closeKind) {
-    if (this.expectOptionalToken(openKind)) {
-      const nodes = [];
-      do {
-        nodes.push(parseFn.call(this));
-      } while (!this.expectOptionalToken(closeKind));
-      return nodes;
-    }
-    return [];
-  }
-  /**
-   * Returns a non-empty list of parse nodes, determined by the parseFn.
-   * This list begins with a lex token of openKind and ends with a lex token of closeKind.
-   * Advances the parser to the next lex token after the closing token.
-   */
-  many(openKind, parseFn, closeKind) {
-    this.expectToken(openKind);
-    const nodes = [];
-    do {
-      nodes.push(parseFn.call(this));
-    } while (!this.expectOptionalToken(closeKind));
-    return nodes;
-  }
-  /**
-   * Returns a non-empty list of parse nodes, determined by the parseFn.
-   * This list may begin with a lex token of delimiterKind followed by items separated by lex tokens of tokenKind.
-   * Advances the parser to the next lex token after last item in the list.
-   */
-  delimitedMany(delimiterKind, parseFn) {
-    this.expectOptionalToken(delimiterKind);
-    const nodes = [];
-    do {
-      nodes.push(parseFn.call(this));
-    } while (this.expectOptionalToken(delimiterKind));
-    return nodes;
-  }
-  advanceLexer() {
-    const { maxTokens } = this._options;
-    const token = this._lexer.advance();
-    if (token.kind !== TokenKind.EOF) {
-      ++this._tokenCounter;
-      if (maxTokens !== void 0 && this._tokenCounter > maxTokens) {
-        throw syntaxError(
-          this._lexer.source,
-          token.start,
-          `Document contains more that ${maxTokens} tokens. Parsing aborted.`
-        );
-      }
-    }
-  }
-}
-function getTokenDesc(token) {
-  const value = token.value;
-  return getTokenKindDesc(token.kind) + (value != null ? ` "${value}"` : "");
-}
-function getTokenKindDesc(kind) {
-  return isPunctuatorTokenKind(kind) ? `"${kind}"` : kind;
-}
-function printString(str) {
-  return `"${str.replace(escapedRegExp, escapedReplacer)}"`;
-}
-const escapedRegExp = /[\x00-\x1f\x22\x5c\x7f-\x9f]/g;
-function escapedReplacer(str) {
-  return escapeSequences[str.charCodeAt(0)];
-}
-const escapeSequences = [
-  "\\u0000",
-  "\\u0001",
-  "\\u0002",
-  "\\u0003",
-  "\\u0004",
-  "\\u0005",
-  "\\u0006",
-  "\\u0007",
-  "\\b",
-  "\\t",
-  "\\n",
-  "\\u000B",
-  "\\f",
-  "\\r",
-  "\\u000E",
-  "\\u000F",
-  "\\u0010",
-  "\\u0011",
-  "\\u0012",
-  "\\u0013",
-  "\\u0014",
-  "\\u0015",
-  "\\u0016",
-  "\\u0017",
-  "\\u0018",
-  "\\u0019",
-  "\\u001A",
-  "\\u001B",
-  "\\u001C",
-  "\\u001D",
-  "\\u001E",
-  "\\u001F",
-  "",
-  "",
-  '\\"',
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  // 2F
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  // 3F
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  // 4F
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "\\\\",
-  "",
-  "",
-  "",
-  // 5F
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  // 6F
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "",
-  "\\u007F",
-  "\\u0080",
-  "\\u0081",
-  "\\u0082",
-  "\\u0083",
-  "\\u0084",
-  "\\u0085",
-  "\\u0086",
-  "\\u0087",
-  "\\u0088",
-  "\\u0089",
-  "\\u008A",
-  "\\u008B",
-  "\\u008C",
-  "\\u008D",
-  "\\u008E",
-  "\\u008F",
-  "\\u0090",
-  "\\u0091",
-  "\\u0092",
-  "\\u0093",
-  "\\u0094",
-  "\\u0095",
-  "\\u0096",
-  "\\u0097",
-  "\\u0098",
-  "\\u0099",
-  "\\u009A",
-  "\\u009B",
-  "\\u009C",
-  "\\u009D",
-  "\\u009E",
-  "\\u009F"
-];
-const BREAK = Object.freeze({});
-function visit(root, visitor, visitorKeys = QueryDocumentKeys) {
-  const enterLeaveMap = /* @__PURE__ */ new Map();
-  for (const kind of Object.values(Kind)) {
-    enterLeaveMap.set(kind, getEnterLeaveForKind(visitor, kind));
-  }
-  let stack = void 0;
-  let inArray = Array.isArray(root);
-  let keys = [root];
-  let index = -1;
-  let edits = [];
-  let node2 = root;
-  let key = void 0;
-  let parent = void 0;
-  const path = [];
-  const ancestors = [];
-  do {
-    index++;
-    const isLeaving = index === keys.length;
-    const isEdited = isLeaving && edits.length !== 0;
-    if (isLeaving) {
-      key = ancestors.length === 0 ? void 0 : path[path.length - 1];
-      node2 = parent;
-      parent = ancestors.pop();
-      if (isEdited) {
-        if (inArray) {
-          node2 = node2.slice();
-          let editOffset = 0;
-          for (const [editKey, editValue] of edits) {
-            const arrayKey = editKey - editOffset;
-            if (editValue === null) {
-              node2.splice(arrayKey, 1);
-              editOffset++;
-            } else {
-              node2[arrayKey] = editValue;
-            }
-          }
-        } else {
-          node2 = { ...node2 };
-          for (const [editKey, editValue] of edits) {
-            node2[editKey] = editValue;
-          }
-        }
-      }
-      index = stack.index;
-      keys = stack.keys;
-      edits = stack.edits;
-      inArray = stack.inArray;
-      stack = stack.prev;
-    } else if (parent) {
-      key = inArray ? index : keys[index];
-      node2 = parent[key];
-      if (node2 === null || node2 === void 0) {
-        continue;
-      }
-      path.push(key);
-    }
-    let result;
-    if (!Array.isArray(node2)) {
-      var _enterLeaveMap$get, _enterLeaveMap$get2;
-      isNode(node2) || devAssert(false, `Invalid AST Node: ${inspect(node2)}.`);
-      const visitFn = isLeaving ? (_enterLeaveMap$get = enterLeaveMap.get(node2.kind)) === null || _enterLeaveMap$get === void 0 ? void 0 : _enterLeaveMap$get.leave : (_enterLeaveMap$get2 = enterLeaveMap.get(node2.kind)) === null || _enterLeaveMap$get2 === void 0 ? void 0 : _enterLeaveMap$get2.enter;
-      result = visitFn === null || visitFn === void 0 ? void 0 : visitFn.call(visitor, node2, key, parent, path, ancestors);
-      if (result === BREAK) {
-        break;
-      }
-      if (result === false) {
-        if (!isLeaving) {
-          path.pop();
-          continue;
-        }
-      } else if (result !== void 0) {
-        edits.push([key, result]);
-        if (!isLeaving) {
-          if (isNode(result)) {
-            node2 = result;
-          } else {
-            path.pop();
-            continue;
-          }
-        }
-      }
-    }
-    if (result === void 0 && isEdited) {
-      edits.push([key, node2]);
-    }
-    if (isLeaving) {
-      path.pop();
-    } else {
-      var _node$kind;
-      stack = {
-        inArray,
-        index,
-        keys,
-        edits,
-        prev: stack
-      };
-      inArray = Array.isArray(node2);
-      keys = inArray ? node2 : (_node$kind = visitorKeys[node2.kind]) !== null && _node$kind !== void 0 ? _node$kind : [];
-      index = -1;
-      edits = [];
-      if (parent) {
-        ancestors.push(parent);
-      }
-      parent = node2;
-    }
-  } while (stack !== void 0);
-  if (edits.length !== 0) {
-    return edits[edits.length - 1][1];
-  }
-  return root;
-}
-function getEnterLeaveForKind(visitor, kind) {
-  const kindVisitor = visitor[kind];
-  if (typeof kindVisitor === "object") {
-    return kindVisitor;
-  } else if (typeof kindVisitor === "function") {
-    return {
-      enter: kindVisitor,
-      leave: void 0
-    };
-  }
-  return {
-    enter: visitor.enter,
-    leave: visitor.leave
-  };
-}
-function print(ast) {
-  return visit(ast, printDocASTReducer);
-}
-const MAX_LINE_LENGTH = 80;
-const printDocASTReducer = {
-  Name: {
-    leave: (node2) => node2.value
-  },
-  Variable: {
-    leave: (node2) => "$" + node2.name
-  },
-  // Document
-  Document: {
-    leave: (node2) => join(node2.definitions, "\n\n")
-  },
-  OperationDefinition: {
-    leave(node2) {
-      const varDefs = hasMultilineItems(node2.variableDefinitions) ? wrap("(\n", join(node2.variableDefinitions, "\n"), "\n)") : wrap("(", join(node2.variableDefinitions, ", "), ")");
-      const prefix = wrap("", node2.description, "\n") + join(
-        [
-          node2.operation,
-          join([node2.name, varDefs]),
-          join(node2.directives, " ")
-        ],
-        " "
-      );
-      return (prefix === "query" ? "" : prefix + " ") + node2.selectionSet;
-    }
-  },
-  VariableDefinition: {
-    leave: ({ variable, type: type2, defaultValue, directives, description }) => wrap("", description, "\n") + variable + ": " + type2 + wrap(" = ", defaultValue) + wrap(" ", join(directives, " "))
-  },
-  SelectionSet: {
-    leave: ({ selections }) => block(selections)
-  },
-  Field: {
-    leave({ alias, name, arguments: args, directives, selectionSet }) {
-      const prefix = wrap("", alias, ": ") + name;
-      let argsLine = prefix + wrap("(", join(args, ", "), ")");
-      if (argsLine.length > MAX_LINE_LENGTH) {
-        argsLine = prefix + wrap("(\n", indent(join(args, "\n")), "\n)");
-      }
-      return join([argsLine, join(directives, " "), selectionSet], " ");
-    }
-  },
-  Argument: {
-    leave: ({ name, value }) => name + ": " + value
-  },
-  // Fragments
-  FragmentSpread: {
-    leave: ({ name, directives }) => "..." + name + wrap(" ", join(directives, " "))
-  },
-  InlineFragment: {
-    leave: ({ typeCondition, directives, selectionSet }) => join(
-      [
-        "...",
-        wrap("on ", typeCondition),
-        join(directives, " "),
-        selectionSet
-      ],
-      " "
-    )
-  },
-  FragmentDefinition: {
-    leave: ({
-      name,
-      typeCondition,
-      variableDefinitions,
-      directives,
-      selectionSet,
-      description
-    }) => wrap("", description, "\n") + // Note: fragment variable definitions are experimental and may be changed
-    // or removed in the future.
-    `fragment ${name}${wrap("(", join(variableDefinitions, ", "), ")")} on ${typeCondition} ${wrap("", join(directives, " "), " ")}` + selectionSet
-  },
-  // Value
-  IntValue: {
-    leave: ({ value }) => value
-  },
-  FloatValue: {
-    leave: ({ value }) => value
-  },
-  StringValue: {
-    leave: ({ value, block: isBlockString }) => isBlockString ? printBlockString(value) : printString(value)
-  },
-  BooleanValue: {
-    leave: ({ value }) => value ? "true" : "false"
-  },
-  NullValue: {
-    leave: () => "null"
-  },
-  EnumValue: {
-    leave: ({ value }) => value
-  },
-  ListValue: {
-    leave: ({ values }) => "[" + join(values, ", ") + "]"
-  },
-  ObjectValue: {
-    leave: ({ fields }) => "{" + join(fields, ", ") + "}"
-  },
-  ObjectField: {
-    leave: ({ name, value }) => name + ": " + value
-  },
-  // Directive
-  Directive: {
-    leave: ({ name, arguments: args }) => "@" + name + wrap("(", join(args, ", "), ")")
-  },
-  // Type
-  NamedType: {
-    leave: ({ name }) => name
-  },
-  ListType: {
-    leave: ({ type: type2 }) => "[" + type2 + "]"
-  },
-  NonNullType: {
-    leave: ({ type: type2 }) => type2 + "!"
-  },
-  // Type System Definitions
-  SchemaDefinition: {
-    leave: ({ description, directives, operationTypes }) => wrap("", description, "\n") + join(["schema", join(directives, " "), block(operationTypes)], " ")
-  },
-  OperationTypeDefinition: {
-    leave: ({ operation, type: type2 }) => operation + ": " + type2
-  },
-  ScalarTypeDefinition: {
-    leave: ({ description, name, directives }) => wrap("", description, "\n") + join(["scalar", name, join(directives, " ")], " ")
-  },
-  ObjectTypeDefinition: {
-    leave: ({ description, name, interfaces, directives, fields }) => wrap("", description, "\n") + join(
-      [
-        "type",
-        name,
-        wrap("implements ", join(interfaces, " & ")),
-        join(directives, " "),
-        block(fields)
-      ],
-      " "
-    )
-  },
-  FieldDefinition: {
-    leave: ({ description, name, arguments: args, type: type2, directives }) => wrap("", description, "\n") + name + (hasMultilineItems(args) ? wrap("(\n", indent(join(args, "\n")), "\n)") : wrap("(", join(args, ", "), ")")) + ": " + type2 + wrap(" ", join(directives, " "))
-  },
-  InputValueDefinition: {
-    leave: ({ description, name, type: type2, defaultValue, directives }) => wrap("", description, "\n") + join(
-      [name + ": " + type2, wrap("= ", defaultValue), join(directives, " ")],
-      " "
-    )
-  },
-  InterfaceTypeDefinition: {
-    leave: ({ description, name, interfaces, directives, fields }) => wrap("", description, "\n") + join(
-      [
-        "interface",
-        name,
-        wrap("implements ", join(interfaces, " & ")),
-        join(directives, " "),
-        block(fields)
-      ],
-      " "
-    )
-  },
-  UnionTypeDefinition: {
-    leave: ({ description, name, directives, types }) => wrap("", description, "\n") + join(
-      ["union", name, join(directives, " "), wrap("= ", join(types, " | "))],
-      " "
-    )
-  },
-  EnumTypeDefinition: {
-    leave: ({ description, name, directives, values }) => wrap("", description, "\n") + join(["enum", name, join(directives, " "), block(values)], " ")
-  },
-  EnumValueDefinition: {
-    leave: ({ description, name, directives }) => wrap("", description, "\n") + join([name, join(directives, " ")], " ")
-  },
-  InputObjectTypeDefinition: {
-    leave: ({ description, name, directives, fields }) => wrap("", description, "\n") + join(["input", name, join(directives, " "), block(fields)], " ")
-  },
-  DirectiveDefinition: {
-    leave: ({ description, name, arguments: args, repeatable, locations }) => wrap("", description, "\n") + "directive @" + name + (hasMultilineItems(args) ? wrap("(\n", indent(join(args, "\n")), "\n)") : wrap("(", join(args, ", "), ")")) + (repeatable ? " repeatable" : "") + " on " + join(locations, " | ")
-  },
-  SchemaExtension: {
-    leave: ({ directives, operationTypes }) => join(
-      ["extend schema", join(directives, " "), block(operationTypes)],
-      " "
-    )
-  },
-  ScalarTypeExtension: {
-    leave: ({ name, directives }) => join(["extend scalar", name, join(directives, " ")], " ")
-  },
-  ObjectTypeExtension: {
-    leave: ({ name, interfaces, directives, fields }) => join(
-      [
-        "extend type",
-        name,
-        wrap("implements ", join(interfaces, " & ")),
-        join(directives, " "),
-        block(fields)
-      ],
-      " "
-    )
-  },
-  InterfaceTypeExtension: {
-    leave: ({ name, interfaces, directives, fields }) => join(
-      [
-        "extend interface",
-        name,
-        wrap("implements ", join(interfaces, " & ")),
-        join(directives, " "),
-        block(fields)
-      ],
-      " "
-    )
-  },
-  UnionTypeExtension: {
-    leave: ({ name, directives, types }) => join(
-      [
-        "extend union",
-        name,
-        join(directives, " "),
-        wrap("= ", join(types, " | "))
-      ],
-      " "
-    )
-  },
-  EnumTypeExtension: {
-    leave: ({ name, directives, values }) => join(["extend enum", name, join(directives, " "), block(values)], " ")
-  },
-  InputObjectTypeExtension: {
-    leave: ({ name, directives, fields }) => join(["extend input", name, join(directives, " "), block(fields)], " ")
-  },
-  // Schema Coordinates
-  TypeCoordinate: {
-    leave: ({ name }) => name
-  },
-  MemberCoordinate: {
-    leave: ({ name, memberName }) => join([name, wrap(".", memberName)])
-  },
-  ArgumentCoordinate: {
-    leave: ({ name, fieldName, argumentName }) => join([name, wrap(".", fieldName), wrap("(", argumentName, ":)")])
-  },
-  DirectiveCoordinate: {
-    leave: ({ name }) => join(["@", name])
-  },
-  DirectiveArgumentCoordinate: {
-    leave: ({ name, argumentName }) => join(["@", name, wrap("(", argumentName, ":)")])
-  }
-};
-function join(maybeArray, separator = "") {
-  var _maybeArray$filter$jo;
-  return (_maybeArray$filter$jo = maybeArray === null || maybeArray === void 0 ? void 0 : maybeArray.filter((x) => x).join(separator)) !== null && _maybeArray$filter$jo !== void 0 ? _maybeArray$filter$jo : "";
-}
-function block(array) {
-  return wrap("{\n", indent(join(array, "\n")), "\n}");
-}
-function wrap(start, maybeString, end = "") {
-  return maybeString != null && maybeString !== "" ? start + maybeString + end : "";
-}
-function indent(str) {
-  return wrap("  ", str.replace(/\n/g, "\n  "));
-}
-function hasMultilineItems(maybeArray) {
-  var _maybeArray$some;
-  return (_maybeArray$some = maybeArray === null || maybeArray === void 0 ? void 0 : maybeArray.some((str) => str.includes("\n"))) !== null && _maybeArray$some !== void 0 ? _maybeArray$some : false;
-}
-const ACCEPT_HEADER = `Accept`;
-const CONTENT_TYPE_HEADER = `Content-Type`;
-const CONTENT_TYPE_JSON = `application/json`;
-const CONTENT_TYPE_GQL = `application/graphql-response+json`;
-const cleanQuery = (str) => str.replace(/([\s,]|#[^\n\r]+)+/g, ` `).trim();
-const isGraphQLContentType = (contentType) => {
-  const contentTypeLower = contentType.toLowerCase();
-  return contentTypeLower.includes(CONTENT_TYPE_GQL) || contentTypeLower.includes(CONTENT_TYPE_JSON);
-};
-const parseGraphQLExecutionResult = (result) => {
-  try {
-    if (Array.isArray(result)) {
-      return {
-        _tag: `Batch`,
-        executionResults: result.map(parseExecutionResult)
-      };
-    } else if (isPlainObject$1(result)) {
-      return {
-        _tag: `Single`,
-        executionResult: parseExecutionResult(result)
-      };
-    } else {
-      throw new Error(`Invalid execution result: result is not object or array. 
-Got:
-${String(result)}`);
-    }
-  } catch (e) {
-    return e;
-  }
-};
-const parseExecutionResult = (result) => {
-  if (typeof result !== `object` || result === null) {
-    throw new Error(`Invalid execution result: result is not object`);
-  }
-  let errors = void 0;
-  let data = void 0;
-  let extensions = void 0;
-  if (`errors` in result) {
-    if (!isPlainObject$1(result.errors) && !Array.isArray(result.errors)) {
-      throw new Error(`Invalid execution result: errors is not plain object OR array`);
-    }
-    errors = result.errors;
-  }
-  if (`data` in result) {
-    if (!isPlainObject$1(result.data) && result.data !== null) {
-      throw new Error(`Invalid execution result: data is not plain object`);
-    }
-    data = result.data;
-  }
-  if (`extensions` in result) {
-    if (!isPlainObject$1(result.extensions))
-      throw new Error(`Invalid execution result: extensions is not plain object`);
-    extensions = result.extensions;
-  }
-  return {
-    data,
-    errors,
-    extensions
-  };
-};
-const isRequestResultHaveErrors = (result) => result._tag === `Batch` ? result.executionResults.some(isExecutionResultHaveErrors) : isExecutionResultHaveErrors(result.executionResult);
-const isExecutionResultHaveErrors = (result) => Array.isArray(result.errors) ? result.errors.length > 0 : Boolean(result.errors);
-const isOperationDefinitionNode = (definition) => {
-  return typeof definition === `object` && definition !== null && `kind` in definition && definition.kind === Kind.OPERATION_DEFINITION;
-};
-const extractOperationName = (document2) => {
-  let operationName = void 0;
-  const defs = document2.definitions.filter(isOperationDefinitionNode);
-  if (defs.length === 1) {
-    operationName = defs[0].name?.value;
-  }
-  return operationName;
-};
-const extractIsMutation = (document2) => {
-  let isMutation = false;
-  const defs = document2.definitions.filter(isOperationDefinitionNode);
-  if (defs.length === 1) {
-    isMutation = defs[0].operation === `mutation`;
-  }
-  return isMutation;
-};
-const analyzeDocument = (document2, excludeOperationName) => {
-  const normalizedDocument = typeof document2 === `string` || `kind` in document2 ? document2 : String(document2);
-  const expression = typeof normalizedDocument === `string` ? normalizedDocument : print(normalizedDocument);
-  let isMutation = false;
-  let operationName = void 0;
-  if (excludeOperationName) {
-    return { expression, isMutation, operationName };
-  }
-  const docNode = tryCatch(() => typeof normalizedDocument === `string` ? parse(normalizedDocument) : normalizedDocument);
-  if (docNode instanceof Error) {
-    return { expression, isMutation, operationName };
-  }
-  operationName = extractOperationName(docNode);
-  isMutation = extractIsMutation(docNode);
-  return { expression, operationName, isMutation };
-};
-const defaultJsonSerializer = JSON;
-const runRequest = async (input) => {
-  const config = {
-    ...input,
-    method: input.request._tag === `Single` ? input.request.document.isMutation ? `POST` : uppercase(input.method ?? `post`) : input.request.hasMutations ? `POST` : uppercase(input.method ?? `post`),
-    fetchOptions: {
-      ...input.fetchOptions,
-      errorPolicy: input.fetchOptions.errorPolicy ?? `none`
-    }
-  };
-  const fetcher = createFetcher(config.method);
-  const fetchResponse = await fetcher(config);
-  const body = await fetchResponse.text();
-  let result;
-  try {
-    result = parseResultFromText(body, fetchResponse.headers.get(CONTENT_TYPE_HEADER), input.fetchOptions.jsonSerializer ?? defaultJsonSerializer);
-  } catch (error) {
-    result = error;
-  }
-  const clientResponseBase = {
-    status: fetchResponse.status,
-    headers: fetchResponse.headers,
-    body
-  };
-  if (!fetchResponse.ok) {
-    if (result instanceof Error) {
-      return new ClientError({ ...clientResponseBase }, {
-        query: input.request._tag === `Single` ? input.request.document.expression : input.request.query,
-        variables: input.request.variables
-      });
-    }
-    const clientResponse = result._tag === `Batch` ? { ...result.executionResults, ...clientResponseBase } : {
-      ...result.executionResult,
-      ...clientResponseBase
-    };
-    return new ClientError(clientResponse, {
-      query: input.request._tag === `Single` ? input.request.document.expression : input.request.query,
-      variables: input.request.variables
-    });
-  }
-  if (result instanceof Error)
-    throw result;
-  if (isRequestResultHaveErrors(result) && config.fetchOptions.errorPolicy === `none`) {
-    const clientResponse = result._tag === `Batch` ? { ...result.executionResults, ...clientResponseBase } : {
-      ...result.executionResult,
-      ...clientResponseBase
-    };
-    return new ClientError(clientResponse, {
-      query: input.request._tag === `Single` ? input.request.document.expression : input.request.query,
-      variables: input.request.variables
-    });
-  }
-  switch (result._tag) {
-    case `Single`:
-      return {
-        ...clientResponseBase,
-        ...executionResultClientResponseFields(config)(result.executionResult)
-      };
-    case `Batch`:
-      return {
-        ...clientResponseBase,
-        data: result.executionResults.map(executionResultClientResponseFields(config))
-      };
-    default:
-      casesExhausted(result);
-  }
-};
-const executionResultClientResponseFields = ($params) => (executionResult) => {
-  return {
-    extensions: executionResult.extensions,
-    data: executionResult.data,
-    errors: $params.fetchOptions.errorPolicy === `all` ? executionResult.errors : void 0
-  };
-};
-const parseResultFromText = (text, contentType, jsonSerializer) => {
-  if (contentType && isGraphQLContentType(contentType)) {
-    return parseGraphQLExecutionResult(jsonSerializer.parse(text));
-  } else {
-    return parseGraphQLExecutionResult(text);
-  }
-};
-const createFetcher = (method) => async (params) => {
-  const headers = new Headers(params.headers);
-  let searchParams = null;
-  let body = void 0;
-  if (!headers.has(ACCEPT_HEADER)) {
-    headers.set(ACCEPT_HEADER, [CONTENT_TYPE_GQL, CONTENT_TYPE_JSON].join(`, `));
-  }
-  if (method === `POST`) {
-    const $jsonSerializer = params.fetchOptions.jsonSerializer ?? defaultJsonSerializer;
-    body = $jsonSerializer.stringify(buildBody(params));
-    if (typeof body === `string` && !headers.has(CONTENT_TYPE_HEADER)) {
-      headers.set(CONTENT_TYPE_HEADER, CONTENT_TYPE_JSON);
-    }
-  } else {
-    searchParams = buildQueryParams(params);
-  }
-  const init = { method, headers, body, ...params.fetchOptions };
-  let url = new URL(params.url);
-  let initResolved = init;
-  if (params.middleware) {
-    const result = await Promise.resolve(params.middleware({
-      ...init,
-      url: params.url,
-      operationName: params.request._tag === `Single` ? params.request.document.operationName : void 0,
-      variables: params.request.variables
-    }));
-    const { url: urlNew, ...initNew } = result;
-    url = new URL(urlNew);
-    initResolved = initNew;
-  }
-  if (searchParams) {
-    searchParams.forEach((value, name) => {
-      url.searchParams.append(name, value);
-    });
-  }
-  const $fetch = params.fetch ?? fetch;
-  return await $fetch(url, initResolved);
-};
-const buildBody = (params) => {
-  switch (params.request._tag) {
-    case `Single`:
-      return {
-        query: params.request.document.expression,
-        variables: params.request.variables,
-        operationName: params.request.document.operationName
-      };
-    case `Batch`:
-      return zip(params.request.query, params.request.variables ?? []).map(([query, variables]) => ({
-        query,
-        variables
-      }));
-    default:
-      throw casesExhausted(params.request);
-  }
-};
-const buildQueryParams = (params) => {
-  const $jsonSerializer = params.fetchOptions.jsonSerializer ?? defaultJsonSerializer;
-  const searchParams = new URLSearchParams();
-  switch (params.request._tag) {
-    case `Single`: {
-      searchParams.append(`query`, cleanQuery(params.request.document.expression));
-      if (params.request.variables) {
-        searchParams.append(`variables`, $jsonSerializer.stringify(params.request.variables));
-      }
-      if (params.request.document.operationName) {
-        searchParams.append(`operationName`, params.request.document.operationName);
-      }
-      return searchParams;
-    }
-    case `Batch`: {
-      const variablesSerialized = params.request.variables?.map((v) => $jsonSerializer.stringify(v)) ?? [];
-      const queriesCleaned = params.request.query.map(cleanQuery);
-      const payload = zip(queriesCleaned, variablesSerialized).map(([query, variables]) => ({
-        query,
-        variables
-      }));
-      searchParams.append(`query`, $jsonSerializer.stringify(payload));
-      return searchParams;
-    }
-    default:
-      throw casesExhausted(params.request);
-  }
-};
-class GraphQLClient {
-  url;
-  requestConfig;
-  constructor(url, requestConfig = {}) {
-    this.url = url;
-    this.requestConfig = requestConfig;
-  }
-  /**
-   * Send a GraphQL query to the server.
-   */
-  rawRequest = async (...args) => {
-    const [queryOrOptions, variables, requestHeaders] = args;
-    const rawRequestOptions = parseRawRequestArgs(queryOrOptions, variables, requestHeaders);
-    const { headers, fetch: fetch2 = globalThis.fetch, method = `POST`, requestMiddleware, responseMiddleware, excludeOperationName, ...fetchOptions } = this.requestConfig;
-    const { url } = this;
-    if (rawRequestOptions.signal !== void 0) {
-      fetchOptions.signal = rawRequestOptions.signal;
-    }
-    const document2 = analyzeDocument(rawRequestOptions.query, excludeOperationName);
-    const response = await runRequest({
-      url,
-      request: {
-        _tag: `Single`,
-        document: document2,
-        variables: rawRequestOptions.variables
-      },
-      headers: {
-        ...HeadersInitToPlainObject(callOrIdentity(headers)),
-        ...HeadersInitToPlainObject(rawRequestOptions.requestHeaders)
-      },
-      fetch: fetch2,
-      method,
-      fetchOptions,
-      middleware: requestMiddleware
-    });
-    if (responseMiddleware) {
-      await responseMiddleware(response, {
-        operationName: document2.operationName,
-        variables,
-        url: this.url
-      });
-    }
-    if (response instanceof Error) {
-      throw response;
-    }
-    return response;
-  };
-  async request(documentOrOptions, ...variablesAndRequestHeaders) {
-    const [variables, requestHeaders] = variablesAndRequestHeaders;
-    const requestOptions = parseRequestArgs(documentOrOptions, variables, requestHeaders);
-    const { headers, fetch: fetch2 = globalThis.fetch, method = `POST`, requestMiddleware, responseMiddleware, excludeOperationName, ...fetchOptions } = this.requestConfig;
-    const { url } = this;
-    if (requestOptions.signal !== void 0) {
-      fetchOptions.signal = requestOptions.signal;
-    }
-    const analyzedDocument = analyzeDocument(requestOptions.document, excludeOperationName);
-    const response = await runRequest({
-      url,
-      request: {
-        _tag: `Single`,
-        document: analyzedDocument,
-        variables: requestOptions.variables
-      },
-      headers: {
-        ...HeadersInitToPlainObject(callOrIdentity(headers)),
-        ...HeadersInitToPlainObject(requestOptions.requestHeaders)
-      },
-      fetch: fetch2,
-      method,
-      fetchOptions,
-      middleware: requestMiddleware
-    });
-    if (responseMiddleware) {
-      await responseMiddleware(response, {
-        operationName: analyzedDocument.operationName,
-        variables: requestOptions.variables,
-        url: this.url
-      });
-    }
-    if (response instanceof Error) {
-      throw response;
-    }
-    return response.data;
-  }
-  async batchRequests(documentsOrOptions, requestHeaders) {
-    const batchRequestOptions = parseBatchRequestArgs(documentsOrOptions, requestHeaders);
-    const { headers, excludeOperationName, ...fetchOptions } = this.requestConfig;
-    if (batchRequestOptions.signal !== void 0) {
-      fetchOptions.signal = batchRequestOptions.signal;
-    }
-    const analyzedDocuments = batchRequestOptions.documents.map(({ document: document2 }) => analyzeDocument(document2, excludeOperationName));
-    const expressions = analyzedDocuments.map(({ expression }) => expression);
-    const hasMutations = analyzedDocuments.some(({ isMutation }) => isMutation);
-    const variables = batchRequestOptions.documents.map(({ variables: variables2 }) => variables2);
-    const response = await runRequest({
-      url: this.url,
-      request: {
-        _tag: `Batch`,
-        operationName: void 0,
-        query: expressions,
-        hasMutations,
-        variables
-      },
-      headers: {
-        ...HeadersInitToPlainObject(callOrIdentity(headers)),
-        ...HeadersInitToPlainObject(batchRequestOptions.requestHeaders)
-      },
-      fetch: this.requestConfig.fetch ?? globalThis.fetch,
-      method: this.requestConfig.method || `POST`,
-      fetchOptions,
-      middleware: this.requestConfig.requestMiddleware
-    });
-    if (this.requestConfig.responseMiddleware) {
-      await this.requestConfig.responseMiddleware(response, {
-        operationName: void 0,
-        variables,
-        url: this.url
-      });
-    }
-    if (response instanceof Error) {
-      throw response;
-    }
-    return response.data;
-  }
-  setHeaders(headers) {
-    this.requestConfig.headers = headers;
-    return this;
-  }
-  /**
-   * Attach a header to the client. All subsequent requests will have this header.
-   */
-  setHeader(key, value) {
-    const { headers } = this.requestConfig;
-    if (headers) {
-      headers[key] = value;
-    } else {
-      this.requestConfig.headers = { [key]: value };
-    }
-    return this;
-  }
-  /**
-   * Change the client endpoint. All subsequent requests will send to this endpoint.
-   */
-  setEndpoint(value) {
-    this.url = value;
-    return this;
-  }
-}
-async function request(urlOrOptions, document2, ...variablesAndRequestHeaders) {
-  const requestOptions = parseRequestExtendedArgs(urlOrOptions, document2, ...variablesAndRequestHeaders);
-  const client = new GraphQLClient(requestOptions.url);
-  return client.request({
-    ...requestOptions
-  });
-}
-const parseRequestArgs = (documentOrOptions, variables, requestHeaders) => {
-  return documentOrOptions.document ? documentOrOptions : {
-    document: documentOrOptions,
-    variables,
-    requestHeaders,
-    signal: void 0
-  };
-};
-const parseRequestExtendedArgs = (urlOrOptions, document2, ...variablesAndRequestHeaders) => {
-  const [variables, requestHeaders] = variablesAndRequestHeaders;
-  return {
-    url: urlOrOptions,
-    document: document2,
-    variables,
-    requestHeaders,
-    signal: void 0
-  };
-};
-const gql = (chunks, ...variables) => {
-  return chunks.reduce((acc, chunk, index) => `${acc}${chunk}${index in variables ? String(variables[index]) : ``}`, ``);
-};
-const ANILIST_API_URL = "https://graphql.anilist.co";
-const SEARCH_QUERY = gql`
-  query ($search: String) {
-    Media(search: $search, type: ANIME) {
-      id
-      title {
-        romaji
-        english
-        native
-      }
-      description
-      genres
-      coverImage {
-        large
-        extraLarge
-      }
-      bannerImage
-      episodes
-      duration
-      season
-      seasonYear
-      status
-      format
-      startDate {
-        year
-        month
-        day
-      }
-      endDate {
-        year
-        month
-        day
-      }
-      averageScore
-      studios {
-        nodes {
-          name
-        }
-      }
-    }
-  }
-`;
-const EPISODES_QUERY = gql`
-  query ($id: Int) {
-    Media(id: $id) {
-      id
-      streamingEpisodes {
-        title
-        thumbnail
-        url
-        site
-      }
-    }
-  }
-`;
-const anilistHandler = {
-  async searchAnime(searchTerm) {
-    try {
-      const variables = { search: searchTerm };
-      const data = await request(ANILIST_API_URL, SEARCH_QUERY, variables);
-      if (data?.Media) {
-        return data.Media;
-      }
-      return null;
-    } catch (error) {
-      console.error("Error searching AniList:", error);
-      throw error;
-    }
-  },
-  async getEpisodes(animeId, totalEpisodes, seasonNumber) {
-    try {
-      const variables = { id: animeId };
-      const data = await request(
-        ANILIST_API_URL,
-        EPISODES_QUERY,
-        variables
-      );
-      const streamingMap = /* @__PURE__ */ new Map();
-      if (data?.Media?.streamingEpisodes) {
-        for (const ep of data.Media.streamingEpisodes) {
-          const match = ep.title?.match(/(?:Episode\s*)?(\d+)/i);
-          if (match) {
-            const epNum = parseInt(match[1], 10);
-            if (!streamingMap.has(epNum)) {
-              streamingMap.set(epNum, ep);
-            }
-          }
-        }
-        if (streamingMap.size === 0) {
-          data.Media.streamingEpisodes.forEach((ep, index) => {
-            streamingMap.set(index + 1, ep);
-          });
-        }
-      }
-      const episodeCount = totalEpisodes || streamingMap.size || 0;
-      const episodes = [];
-      for (let i = 1; i <= episodeCount; i++) {
-        const streamingEp = streamingMap.get(i);
-        episodes.push({
-          episodeNumber: i,
-          seasonNumber: seasonNumber ?? null,
-          title: streamingEp?.title || `Episode ${i}`,
-          description: null,
-          airDate: null,
-          thumbnail: streamingEp?.thumbnail || null
-        });
-      }
-      return episodes;
-    } catch (error) {
-      console.error("Error fetching AniList episodes:", error);
-      if (totalEpisodes) {
-        return Array.from({ length: totalEpisodes }, (_, i) => ({
-          episodeNumber: i + 1,
-          seasonNumber: seasonNumber ?? null,
-          title: `Episode ${i + 1}`,
-          description: null,
-          airDate: null,
-          thumbnail: null
-        }));
-      }
-      return [];
-    }
-  },
-  async searchAndFetchMetadata(seriesName, seasonNumber) {
-    try {
-      const searchQuery = seasonNumber ? `${seriesName} Season ${seasonNumber}` : seriesName;
-      const media = await this.searchAnime(searchQuery);
-      if (!media) {
-        if (seasonNumber) {
-          const mediaWithoutSeason = await this.searchAnime(seriesName);
-          if (mediaWithoutSeason) {
-            const episodes2 = await this.getEpisodes(mediaWithoutSeason.id, mediaWithoutSeason.episodes, seasonNumber);
-            return this.formatMetadata(mediaWithoutSeason, episodes2, seasonNumber);
-          }
-        }
-        return null;
-      }
-      const episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
-      return this.formatMetadata(media, episodes, seasonNumber);
-    } catch (error) {
-      console.error("Error fetching AniList metadata:", error);
-      return null;
-    }
-  },
-  formatMetadata(media, episodes, seasonNumber) {
-    const formatDate = (date) => {
-      if (!date?.year) return null;
-      const year = date.year;
-      const month = String(date.month || 1).padStart(2, "0");
-      const day = String(date.day || 1).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-    let title = media.title.english || media.title.romaji || media.title.native;
-    if (seasonNumber) {
-      title = `${title} (Season ${seasonNumber})`;
-    }
-    return {
-      seriesId: `anilist_${media.id}${seasonNumber ? `_s${seasonNumber.toString().padStart(2, "0")}` : ""}`,
-      title,
-      titleRomaji: media.title.romaji,
-      titleEnglish: media.title.english,
-      titleNative: media.title.native,
-      description: media.description || "",
-      genres: media.genres || [],
-      poster: media.coverImage?.extraLarge || media.coverImage?.large || null,
-      banner: media.bannerImage || null,
-      episodes,
-      totalEpisodes: media.episodes,
-      duration: media.duration,
-      season: media.season,
-      seasonYear: media.seasonYear,
-      status: media.status,
-      format: media.format,
-      averageScore: media.averageScore,
-      studios: media.studios?.nodes?.map((s) => s.name) || [],
-      startDate: formatDate(media.startDate),
-      endDate: formatDate(media.endDate),
-      anilistId: media.id
-    };
-  }
-};
 function bind(fn, thisArg) {
   return function wrap2() {
     return fn.apply(thisArg, arguments);
@@ -4238,7 +53,7 @@ const isFunction$1 = typeOfTest("function");
 const isNumber = typeOfTest("number");
 const isObject = (thing) => thing !== null && typeof thing === "object";
 const isBoolean = (thing) => thing === true || thing === false;
-const isPlainObject = (val) => {
+const isPlainObject$1 = (val) => {
   if (kindOf(val) !== "object") {
     return false;
   }
@@ -4320,9 +135,9 @@ function merge() {
   const result = {};
   const assignValue = (val, key) => {
     const targetKey = caseless && findKey(result, key) || key;
-    if (isPlainObject(result[targetKey]) && isPlainObject(val)) {
+    if (isPlainObject$1(result[targetKey]) && isPlainObject$1(val)) {
       result[targetKey] = merge(result[targetKey], val);
-    } else if (isPlainObject(val)) {
+    } else if (isPlainObject$1(val)) {
       result[targetKey] = merge({}, val);
     } else if (isArray(val)) {
       result[targetKey] = val.slice();
@@ -4539,7 +354,7 @@ const utils$1 = {
   isNumber,
   isBoolean,
   isObject,
-  isPlainObject,
+  isPlainObject: isPlainObject$1,
   isEmptyObject,
   isReadableStream,
   isRequest,
@@ -4686,11 +501,11 @@ function requireDelayed_stream() {
     this._bufferedEvents = [];
   }
   util.inherits(DelayedStream, Stream);
-  DelayedStream.create = function(source, options) {
+  DelayedStream.create = function(source, options2) {
     var delayedStream = new this();
-    options = options || {};
-    for (var option in options) {
-      delayedStream[option] = options[option];
+    options2 = options2 || {};
+    for (var option in options2) {
+      delayedStream[option] = options2[option];
     }
     delayedStream.source = source;
     var realEmit = source.emit;
@@ -4782,11 +597,11 @@ function requireCombined_stream() {
     this._pendingNext = false;
   }
   util.inherits(CombinedStream, Stream);
-  CombinedStream.create = function(options) {
+  CombinedStream.create = function(options2) {
     var combinedStream = new this();
-    options = options || {};
-    for (var option in options) {
-      combinedStream[option] = options[option];
+    options2 = options2 || {};
+    for (var option in options2) {
+      combinedStream[option] = options2[option];
     }
     return combinedStream;
   };
@@ -4812,8 +627,8 @@ function requireCombined_stream() {
     this._streams.push(stream2);
     return this;
   };
-  CombinedStream.prototype.pipe = function(dest, options) {
-    Stream.prototype.pipe.call(this, dest, options);
+  CombinedStream.prototype.pipe = function(dest, options2) {
+    Stream.prototype.pipe.call(this, dest, options2);
     this.resume();
     return dest;
   };
@@ -8401,26 +4216,26 @@ function requireForm_data() {
   var setToStringTag = /* @__PURE__ */ requireEsSetTostringtag();
   var hasOwn = /* @__PURE__ */ requireHasown();
   var populate2 = requirePopulate();
-  function FormData2(options) {
+  function FormData2(options2) {
     if (!(this instanceof FormData2)) {
-      return new FormData2(options);
+      return new FormData2(options2);
     }
     this._overheadLength = 0;
     this._valueLength = 0;
     this._valuesToMeasure = [];
     CombinedStream.call(this);
-    options = options || {};
-    for (var option in options) {
-      this[option] = options[option];
+    options2 = options2 || {};
+    for (var option in options2) {
+      this[option] = options2[option];
     }
   }
   util.inherits(FormData2, CombinedStream);
   FormData2.LINE_BREAK = "\r\n";
   FormData2.DEFAULT_CONTENT_TYPE = "application/octet-stream";
-  FormData2.prototype.append = function(field, value, options) {
-    options = options || {};
-    if (typeof options === "string") {
-      options = { filename: options };
+  FormData2.prototype.append = function(field, value, options2) {
+    options2 = options2 || {};
+    if (typeof options2 === "string") {
+      options2 = { filename: options2 };
     }
     var append2 = CombinedStream.prototype.append.bind(this);
     if (typeof value === "number" || value == null) {
@@ -8430,17 +4245,17 @@ function requireForm_data() {
       this._error(new Error("Arrays are not supported."));
       return;
     }
-    var header = this._multiPartHeader(field, value, options);
+    var header = this._multiPartHeader(field, value, options2);
     var footer = this._multiPartFooter();
     append2(header);
     append2(value);
     append2(footer);
-    this._trackLength(header, value, options);
+    this._trackLength(header, value, options2);
   };
-  FormData2.prototype._trackLength = function(header, value, options) {
+  FormData2.prototype._trackLength = function(header, value, options2) {
     var valueLength = 0;
-    if (options.knownLength != null) {
-      valueLength += Number(options.knownLength);
+    if (options2.knownLength != null) {
+      valueLength += Number(options2.knownLength);
     } else if (Buffer.isBuffer(value)) {
       valueLength = value.length;
     } else if (typeof value === "string") {
@@ -8451,7 +4266,7 @@ function requireForm_data() {
     if (!value || !value.path && !(value.readable && hasOwn(value, "httpVersion")) && !(value instanceof Stream)) {
       return;
     }
-    if (!options.knownLength) {
+    if (!options2.knownLength) {
       this._valuesToMeasure.push(value);
     }
   };
@@ -8481,12 +4296,12 @@ function requireForm_data() {
       callback("Unknown stream");
     }
   };
-  FormData2.prototype._multiPartHeader = function(field, value, options) {
-    if (typeof options.header === "string") {
-      return options.header;
+  FormData2.prototype._multiPartHeader = function(field, value, options2) {
+    if (typeof options2.header === "string") {
+      return options2.header;
     }
-    var contentDisposition = this._getContentDisposition(value, options);
-    var contentType = this._getContentType(value, options);
+    var contentDisposition = this._getContentDisposition(value, options2);
+    var contentType = this._getContentType(value, options2);
     var contents = "";
     var headers = {
       // add custom disposition as third element or keep it two elements if not
@@ -8494,8 +4309,8 @@ function requireForm_data() {
       // if no content type. allow it to be empty array
       "Content-Type": [].concat(contentType || [])
     };
-    if (typeof options.header === "object") {
-      populate2(headers, options.header);
+    if (typeof options2.header === "object") {
+      populate2(headers, options2.header);
     }
     var header;
     for (var prop in headers) {
@@ -8514,12 +4329,12 @@ function requireForm_data() {
     }
     return "--" + this.getBoundary() + FormData2.LINE_BREAK + contents + FormData2.LINE_BREAK;
   };
-  FormData2.prototype._getContentDisposition = function(value, options) {
+  FormData2.prototype._getContentDisposition = function(value, options2) {
     var filename;
-    if (typeof options.filepath === "string") {
-      filename = path.normalize(options.filepath).replace(/\\/g, "/");
-    } else if (options.filename || value && (value.name || value.path)) {
-      filename = path.basename(options.filename || value && (value.name || value.path));
+    if (typeof options2.filepath === "string") {
+      filename = path.normalize(options2.filepath).replace(/\\/g, "/");
+    } else if (options2.filename || value && (value.name || value.path)) {
+      filename = path.basename(options2.filename || value && (value.name || value.path));
     } else if (value && value.readable && hasOwn(value, "httpVersion")) {
       filename = path.basename(value.client._httpMessage.path || "");
     }
@@ -8527,8 +4342,8 @@ function requireForm_data() {
       return 'filename="' + filename + '"';
     }
   };
-  FormData2.prototype._getContentType = function(value, options) {
-    var contentType = options.contentType;
+  FormData2.prototype._getContentType = function(value, options2) {
+    var contentType = options2.contentType;
     if (!contentType && value && value.name) {
       contentType = mime.lookup(value.name);
     }
@@ -8538,8 +4353,8 @@ function requireForm_data() {
     if (!contentType && value && value.readable && hasOwn(value, "httpVersion")) {
       contentType = value.headers["content-type"];
     }
-    if (!contentType && (options.filepath || options.filename)) {
-      contentType = mime.lookup(options.filepath || options.filename);
+    if (!contentType && (options2.filepath || options2.filename)) {
+      contentType = mime.lookup(options2.filepath || options2.filename);
     }
     if (!contentType && value && typeof value === "object") {
       contentType = FormData2.DEFAULT_CONTENT_TYPE;
@@ -8642,27 +4457,27 @@ function requireForm_data() {
   };
   FormData2.prototype.submit = function(params, cb) {
     var request2;
-    var options;
+    var options2;
     var defaults2 = { method: "post" };
     if (typeof params === "string") {
       params = parseUrl(params);
-      options = populate2({
+      options2 = populate2({
         port: params.port,
         path: params.pathname,
         host: params.hostname,
         protocol: params.protocol
       }, defaults2);
     } else {
-      options = populate2(params, defaults2);
-      if (!options.port) {
-        options.port = options.protocol === "https:" ? 443 : 80;
+      options2 = populate2(params, defaults2);
+      if (!options2.port) {
+        options2.port = options2.protocol === "https:" ? 443 : 80;
       }
     }
-    options.headers = this.getHeaders(params.headers);
-    if (options.protocol === "https:") {
-      request2 = https.request(options);
+    options2.headers = this.getHeaders(params.headers);
+    if (options2.protocol === "https:") {
+      request2 = https.request(options2);
     } else {
-      request2 = http.request(options);
+      request2 = http.request(options2);
     }
     this.getLength((function(err, length) {
       if (err && err !== "Unknown stream") {
@@ -8722,23 +4537,23 @@ function isFlatArray(arr) {
 const predicates = utils$1.toFlatObject(utils$1, {}, null, function filter(prop) {
   return /^is[A-Z]/.test(prop);
 });
-function toFormData$1(obj, formData, options) {
+function toFormData$1(obj, formData, options2) {
   if (!utils$1.isObject(obj)) {
     throw new TypeError("target must be an object");
   }
   formData = formData || new (FormData$1 || FormData)();
-  options = utils$1.toFlatObject(options, {
+  options2 = utils$1.toFlatObject(options2, {
     metaTokens: true,
     dots: false,
     indexes: false
   }, false, function defined(option, source) {
     return !utils$1.isUndefined(source[option]);
   });
-  const metaTokens = options.metaTokens;
-  const visitor = options.visitor || defaultVisitor;
-  const dots = options.dots;
-  const indexes = options.indexes;
-  const _Blob = options.Blob || typeof Blob !== "undefined" && Blob;
+  const metaTokens = options2.metaTokens;
+  const visitor = options2.visitor || defaultVisitor;
+  const dots = options2.dots;
+  const indexes = options2.indexes;
+  const _Blob = options2.Blob || typeof Blob !== "undefined" && Blob;
   const useBlob = _Blob && utils$1.isSpecCompliantForm(formData);
   if (!utils$1.isFunction(visitor)) {
     throw new TypeError("visitor must be a function");
@@ -8829,9 +4644,9 @@ function encode$1(str) {
     return charMap[match];
   });
 }
-function AxiosURLSearchParams(params, options) {
+function AxiosURLSearchParams(params, options2) {
   this._pairs = [];
-  params && toFormData$1(params, this, options);
+  params && toFormData$1(params, this, options2);
 }
 const prototype = AxiosURLSearchParams.prototype;
 prototype.append = function append(name, value) {
@@ -8848,22 +4663,22 @@ prototype.toString = function toString2(encoder) {
 function encode(val) {
   return encodeURIComponent(val).replace(/%3A/gi, ":").replace(/%24/g, "$").replace(/%2C/gi, ",").replace(/%20/g, "+");
 }
-function buildURL(url, params, options) {
+function buildURL(url, params, options2) {
   if (!params) {
     return url;
   }
-  const _encode = options && options.encode || encode;
-  if (utils$1.isFunction(options)) {
-    options = {
-      serialize: options
+  const _encode = options2 && options2.encode || encode;
+  if (utils$1.isFunction(options2)) {
+    options2 = {
+      serialize: options2
     };
   }
-  const serializeFn = options && options.serialize;
+  const serializeFn = options2 && options2.serialize;
   let serializedParams;
   if (serializeFn) {
-    serializedParams = serializeFn(params, options);
+    serializedParams = serializeFn(params, options2);
   } else {
-    serializedParams = utils$1.isURLSearchParams(params) ? params.toString() : new AxiosURLSearchParams(params, options).toString(_encode);
+    serializedParams = utils$1.isURLSearchParams(params) ? params.toString() : new AxiosURLSearchParams(params, options2).toString(_encode);
   }
   if (serializedParams) {
     const hashmarkIndex = url.indexOf("#");
@@ -8886,12 +4701,12 @@ class InterceptorManager {
    *
    * @return {Number} An ID used to remove interceptor later
    */
-  use(fulfilled, rejected, options) {
+  use(fulfilled, rejected, options2) {
     this.handlers.push({
       fulfilled,
       rejected,
-      synchronous: options ? options.synchronous : false,
-      runWhen: options ? options.runWhen : null
+      synchronous: options2 ? options2.synchronous : false,
+      runWhen: options2 ? options2.runWhen : null
     });
     return this.handlers.length - 1;
   }
@@ -8989,7 +4804,7 @@ const platform = {
   ...utils,
   ...platform$1
 };
-function toURLEncodedForm(data, options) {
+function toURLEncodedForm(data, options2) {
   return toFormData$1(data, new platform.classes.URLSearchParams(), {
     visitor: function(value, key, path, helpers) {
       if (platform.isNode && utils$1.isBuffer(value)) {
@@ -8998,7 +4813,7 @@ function toURLEncodedForm(data, options) {
       }
       return helpers.defaultVisitor.apply(this, arguments);
     },
-    ...options
+    ...options2
   });
 }
 function parsePropPath(name) {
@@ -9447,10 +5262,10 @@ function CanceledError$1(message, config, request2) {
 utils$1.inherits(CanceledError$1, AxiosError$1, {
   __CANCEL__: true
 });
-function settle(resolve, reject, response) {
+function settle(resolve2, reject, response) {
   const validateStatus2 = response.config.validateStatus;
   if (!response.status || !validateStatus2 || validateStatus2(response.status)) {
-    resolve(response);
+    resolve2(response);
   } else {
     reject(new AxiosError$1(
       "Request failed with status code " + response.status,
@@ -9560,13 +5375,13 @@ function requireMs() {
   var d = h * 24;
   var w = d * 7;
   var y = d * 365.25;
-  ms = function(val, options) {
-    options = options || {};
+  ms = function(val, options2) {
+    options2 = options2 || {};
     var type2 = typeof val;
     if (type2 === "string" && val.length > 0) {
       return parse2(val);
     } else if (type2 === "number" && isFinite(val)) {
-      return options.long ? fmtLong(val) : fmtShort(val);
+      return options2.long ? fmtLong(val) : fmtShort(val);
     }
     throw new Error(
       "val is not a non-empty string or a valid number. val=" + JSON.stringify(val)
@@ -9721,10 +5536,10 @@ function requireCommon() {
             return "%";
           }
           index++;
-          const formatter = createDebug.formatters[format];
-          if (typeof formatter === "function") {
+          const formatter2 = createDebug.formatters[format];
+          if (typeof formatter2 === "function") {
             const val = args[index];
-            match = formatter.call(self2, val);
+            match = formatter2.call(self2, val);
             args.splice(index, 1);
             index--;
           }
@@ -10130,10 +5945,10 @@ function requireSupportsColor() {
     }
     return min2;
   }
-  function getSupportLevel(stream2, options = {}) {
+  function getSupportLevel(stream2, options2 = {}) {
     const level = supportsColor(stream2, {
       streamIsTTY: stream2 && stream2.isTTY,
-      ...options
+      ...options2
     });
     return translateLevel(level);
   }
@@ -10420,10 +6235,10 @@ function requireFollowRedirects() {
     "write after end"
   );
   var destroy = Writable.prototype.destroy || noop2;
-  function RedirectableRequest(options, responseCallback) {
+  function RedirectableRequest(options2, responseCallback) {
     Writable.call(this);
-    this._sanitizeOptions(options);
-    this._options = options;
+    this._sanitizeOptions(options2);
+    this._options = options2;
     this._ended = false;
     this._ending = false;
     this._redirectCount = 0;
@@ -10574,23 +6389,23 @@ function requireFollowRedirects() {
       }
     });
   });
-  RedirectableRequest.prototype._sanitizeOptions = function(options) {
-    if (!options.headers) {
-      options.headers = {};
+  RedirectableRequest.prototype._sanitizeOptions = function(options2) {
+    if (!options2.headers) {
+      options2.headers = {};
     }
-    if (options.host) {
-      if (!options.hostname) {
-        options.hostname = options.host;
+    if (options2.host) {
+      if (!options2.hostname) {
+        options2.hostname = options2.host;
       }
-      delete options.host;
+      delete options2.host;
     }
-    if (!options.pathname && options.path) {
-      var searchPos = options.path.indexOf("?");
+    if (!options2.pathname && options2.path) {
+      var searchPos = options2.path.indexOf("?");
       if (searchPos < 0) {
-        options.pathname = options.path;
+        options2.pathname = options2.path;
       } else {
-        options.pathname = options.path.substring(0, searchPos);
-        options.search = options.path.substring(searchPos);
+        options2.pathname = options2.path.substring(0, searchPos);
+        options2.search = options2.path.substring(searchPos);
       }
     }
   };
@@ -10710,34 +6525,34 @@ function requireFollowRedirects() {
       var protocol2 = scheme + ":";
       var nativeProtocol = nativeProtocols[protocol2] = protocols[scheme];
       var wrappedProtocol = exports$1[scheme] = Object.create(nativeProtocol);
-      function request2(input, options, callback) {
+      function request2(input, options2, callback) {
         if (isURL(input)) {
           input = spreadUrlObject(input);
         } else if (isString2(input)) {
           input = spreadUrlObject(parseUrl(input));
         } else {
-          callback = options;
-          options = validateUrl(input);
+          callback = options2;
+          options2 = validateUrl(input);
           input = { protocol: protocol2 };
         }
-        if (isFunction2(options)) {
-          callback = options;
-          options = null;
+        if (isFunction2(options2)) {
+          callback = options2;
+          options2 = null;
         }
-        options = Object.assign({
+        options2 = Object.assign({
           maxRedirects: exports$1.maxRedirects,
           maxBodyLength: exports$1.maxBodyLength
-        }, input, options);
-        options.nativeProtocols = nativeProtocols;
-        if (!isString2(options.host) && !isString2(options.hostname)) {
-          options.hostname = "::1";
+        }, input, options2);
+        options2.nativeProtocols = nativeProtocols;
+        if (!isString2(options2.host) && !isString2(options2.hostname)) {
+          options2.hostname = "::1";
         }
-        assert.equal(options.protocol, protocol2, "protocol mismatch");
-        debug("options", options);
-        return new RedirectableRequest(options, callback);
+        assert.equal(options2.protocol, protocol2, "protocol mismatch");
+        debug("options", options2);
+        return new RedirectableRequest(options2, callback);
       }
-      function get2(input, options, callback) {
-        var wrappedRequest = wrappedProtocol.request(input, options, callback);
+      function get2(input, options2, callback) {
+        var wrappedRequest = wrappedProtocol.request(input, options2, callback);
         wrappedRequest.end();
         return wrappedRequest;
       }
@@ -10762,8 +6577,8 @@ function requireFollowRedirects() {
     }
     return parsed;
   }
-  function resolveUrl(relative, base) {
-    return useNativeURL ? new URL2(relative, base) : parseUrl(url.resolve(base, relative));
+  function resolveUrl(relative2, base) {
+    return useNativeURL ? new URL2(relative2, base) : parseUrl(url.resolve(base, relative2));
   }
   function validateUrl(input) {
     if (/^\[/.test(input.hostname) && !/^\[[:0-9a-f]+\]$/i.test(input.hostname)) {
@@ -10856,8 +6671,8 @@ function parseProtocol(url) {
   return match && match[1] || "";
 }
 const DATA_URL_PATTERN = /^(?:([^;]+);)?(?:[^;]+;)?(base64|),([\s\S]*)$/;
-function fromDataURI(uri2, asBlob, options) {
-  const _Blob = options && options.Blob || platform.classes.Blob;
+function fromDataURI(uri2, asBlob, options2) {
+  const _Blob = options2 && options2.Blob || platform.classes.Blob;
   const protocol2 = parseProtocol(uri2);
   if (asBlob === void 0 && _Blob) {
     asBlob = true;
@@ -10884,8 +6699,8 @@ function fromDataURI(uri2, asBlob, options) {
 }
 const kInternals = Symbol("internals");
 class AxiosTransformStream extends stream.Transform {
-  constructor(options) {
-    options = utils$1.toFlatObject(options, {
+  constructor(options2) {
+    options2 = utils$1.toFlatObject(options2, {
       maxRate: 0,
       chunkSize: 64 * 1024,
       minChunkSize: 100,
@@ -10896,13 +6711,13 @@ class AxiosTransformStream extends stream.Transform {
       return !utils$1.isUndefined(source[prop]);
     });
     super({
-      readableHighWaterMark: options.chunkSize
+      readableHighWaterMark: options2.chunkSize
     });
     const internals = this[kInternals] = {
-      timeWindow: options.timeWindow,
-      chunkSize: options.chunkSize,
-      maxRate: options.maxRate,
-      minChunkSize: options.minChunkSize,
+      timeWindow: options2.timeWindow,
+      chunkSize: options2.chunkSize,
+      maxRate: options2.maxRate,
+      minChunkSize: options2.minChunkSize,
       bytesSeen: 0,
       isCaptured: false,
       notifiedBytesLoaded: 0,
@@ -11044,12 +6859,12 @@ class FormDataPart {
     })[match]);
   }
 }
-const formDataToStream = (form, headersHandler, options) => {
+const formDataToStream = (form, headersHandler, options2) => {
   const {
     tag = "form-data-boundary",
     size = 25,
     boundary = tag + "-" + platform.generateString(size, BOUNDARY_ALPHABET)
-  } = options || {};
+  } = options2 || {};
   if (!utils$1.isFormData(form)) {
     throw TypeError("FormData instance required");
   }
@@ -11280,21 +7095,21 @@ class Http2Sessions {
   constructor() {
     this.sessions = /* @__PURE__ */ Object.create(null);
   }
-  getSession(authority, options) {
-    options = Object.assign({
+  getSession(authority, options2) {
+    options2 = Object.assign({
       sessionTimeout: 1e3
-    }, options);
+    }, options2);
     let authoritySessions = this.sessions[authority];
     if (authoritySessions) {
       let len = authoritySessions.length;
       for (let i = 0; i < len; i++) {
         const [sessionHandle, sessionOptions] = authoritySessions[i];
-        if (!sessionHandle.destroyed && !sessionHandle.closed && require$$1.isDeepStrictEqual(sessionOptions, options)) {
+        if (!sessionHandle.destroyed && !sessionHandle.closed && require$$1.isDeepStrictEqual(sessionOptions, options2)) {
           return sessionHandle;
         }
       }
     }
-    const session = http2.connect(authority, options);
+    const session = http2.connect(authority, options2);
     let removed;
     const removeSession = () => {
       if (removed) {
@@ -11314,7 +7129,7 @@ class Http2Sessions {
       }
     };
     const originalRequestFn = session.request;
-    const { sessionTimeout } = options;
+    const { sessionTimeout } = options2;
     if (sessionTimeout != null) {
       let timer;
       let streamsCount = 0;
@@ -11339,22 +7154,22 @@ class Http2Sessions {
     session.once("close", removeSession);
     let entry = [
       session,
-      options
+      options2
     ];
     authoritySessions ? authoritySessions.push(entry) : authoritySessions = this.sessions[authority] = [entry];
     return session;
   }
 }
 const http2Sessions = new Http2Sessions();
-function dispatchBeforeRedirect(options, responseDetails) {
-  if (options.beforeRedirects.proxy) {
-    options.beforeRedirects.proxy(options);
+function dispatchBeforeRedirect(options2, responseDetails) {
+  if (options2.beforeRedirects.proxy) {
+    options2.beforeRedirects.proxy(options2);
   }
-  if (options.beforeRedirects.config) {
-    options.beforeRedirects.config(options, responseDetails);
+  if (options2.beforeRedirects.config) {
+    options2.beforeRedirects.config(options2, responseDetails);
   }
 }
-function setProxy(options, configProxy, location) {
+function setProxy(options2, configProxy, location) {
   let proxy = configProxy;
   if (!proxy && proxy !== false) {
     const proxyUrl = proxyFromEnv.getProxyForUrl(location);
@@ -11371,25 +7186,25 @@ function setProxy(options, configProxy, location) {
         proxy.auth = (proxy.auth.username || "") + ":" + (proxy.auth.password || "");
       }
       const base64 = Buffer.from(proxy.auth, "utf8").toString("base64");
-      options.headers["Proxy-Authorization"] = "Basic " + base64;
+      options2.headers["Proxy-Authorization"] = "Basic " + base64;
     }
-    options.headers.host = options.hostname + (options.port ? ":" + options.port : "");
+    options2.headers.host = options2.hostname + (options2.port ? ":" + options2.port : "");
     const proxyHost = proxy.hostname || proxy.host;
-    options.hostname = proxyHost;
-    options.host = proxyHost;
-    options.port = proxy.port;
-    options.path = location;
+    options2.hostname = proxyHost;
+    options2.host = proxyHost;
+    options2.port = proxy.port;
+    options2.path = location;
     if (proxy.protocol) {
-      options.protocol = proxy.protocol.includes(":") ? proxy.protocol : `${proxy.protocol}:`;
+      options2.protocol = proxy.protocol.includes(":") ? proxy.protocol : `${proxy.protocol}:`;
     }
   }
-  options.beforeRedirects.proxy = function beforeRedirect(redirectOptions) {
+  options2.beforeRedirects.proxy = function beforeRedirect(redirectOptions) {
     setProxy(redirectOptions, configProxy, redirectOptions.href);
   };
 }
 const isHttpAdapterSupported = typeof process !== "undefined" && utils$1.kindOf(process) === "process";
 const wrapAsync = (asyncExecutor) => {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     let onDone;
     let isDone;
     const done = (value, isRejected) => {
@@ -11399,7 +7214,7 @@ const wrapAsync = (asyncExecutor) => {
     };
     const _resolve = (value) => {
       done(value);
-      resolve(value);
+      resolve2(value);
     };
     const _reject = (reason) => {
       done(reason, true);
@@ -11419,9 +7234,9 @@ const resolveFamily = ({ address, family }) => {
 };
 const buildAddressEntry = (address, family) => resolveFamily(utils$1.isObject(address) ? address : { address, family });
 const http2Transport = {
-  request(options, cb) {
-    const authority = options.protocol + "//" + options.hostname + ":" + (options.port || 80);
-    const { http2Options, headers } = options;
+  request(options2, cb) {
+    const authority = options2.protocol + "//" + options2.hostname + ":" + (options2.port || 80);
+    const { http2Options, headers } = options2;
     const session = http2Sessions.getSession(authority, http2Options);
     const {
       HTTP2_HEADER_SCHEME,
@@ -11430,9 +7245,9 @@ const http2Transport = {
       HTTP2_HEADER_STATUS
     } = http2.constants;
     const http2Headers = {
-      [HTTP2_HEADER_SCHEME]: options.protocol.replace(":", ""),
-      [HTTP2_HEADER_METHOD]: options.method,
-      [HTTP2_HEADER_PATH]: options.path
+      [HTTP2_HEADER_SCHEME]: options2.protocol.replace(":", ""),
+      [HTTP2_HEADER_METHOD]: options2.method,
+      [HTTP2_HEADER_PATH]: options2.path
     };
     utils$1.forEach(headers, (header, name) => {
       name.charAt(0) !== ":" && (http2Headers[name] = header);
@@ -11451,7 +7266,7 @@ const http2Transport = {
   }
 };
 const httpAdapter = isHttpAdapterSupported && function httpAdapter2(config) {
-  return wrapAsync(async function dispatchHttpRequest(resolve, reject, onDone) {
+  return wrapAsync(async function dispatchHttpRequest(resolve2, reject, onDone) {
     let { data, lookup, family, httpVersion = 1, http2Options } = config;
     const { responseType, responseEncoding } = config;
     const method = config.method.toUpperCase();
@@ -11536,7 +7351,7 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter2(config) {
       }
       let convertedData;
       if (method !== "GET") {
-        return settle(resolve, reject, {
+        return settle(resolve2, reject, {
           status: 405,
           statusText: "method not allowed",
           headers: {},
@@ -11558,7 +7373,7 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter2(config) {
       } else if (responseType === "stream") {
         convertedData = stream.Readable.from(convertedData);
       }
-      return settle(resolve, reject, {
+      return settle(resolve2, reject, {
         data: convertedData,
         status: 200,
         statusText: "OK",
@@ -11675,7 +7490,7 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter2(config) {
       "gzip, compress, deflate" + (isBrotliSupported ? ", br" : ""),
       false
     );
-    const options = {
+    const options2 = {
       path,
       method,
       headers: headers.toJSON(),
@@ -11687,17 +7502,17 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter2(config) {
       beforeRedirects: {},
       http2Options
     };
-    !utils$1.isUndefined(lookup) && (options.lookup = lookup);
+    !utils$1.isUndefined(lookup) && (options2.lookup = lookup);
     if (config.socketPath) {
-      options.socketPath = config.socketPath;
+      options2.socketPath = config.socketPath;
     } else {
-      options.hostname = parsed.hostname.startsWith("[") ? parsed.hostname.slice(1, -1) : parsed.hostname;
-      options.port = parsed.port;
-      setProxy(options, config.proxy, protocol2 + "//" + parsed.hostname + (parsed.port ? ":" + parsed.port : "") + options.path);
+      options2.hostname = parsed.hostname.startsWith("[") ? parsed.hostname.slice(1, -1) : parsed.hostname;
+      options2.port = parsed.port;
+      setProxy(options2, config.proxy, protocol2 + "//" + parsed.hostname + (parsed.port ? ":" + parsed.port : "") + options2.path);
     }
     let transport;
-    const isHttpsRequest = isHttps.test(options.protocol);
-    options.agent = isHttpsRequest ? config.httpsAgent : config.httpAgent;
+    const isHttpsRequest = isHttps.test(options2.protocol);
+    options2.agent = isHttpsRequest ? config.httpsAgent : config.httpAgent;
     if (isHttp2) {
       transport = http2Transport;
     } else {
@@ -11707,23 +7522,23 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter2(config) {
         transport = isHttpsRequest ? require$$4 : require$$3;
       } else {
         if (config.maxRedirects) {
-          options.maxRedirects = config.maxRedirects;
+          options2.maxRedirects = config.maxRedirects;
         }
         if (config.beforeRedirect) {
-          options.beforeRedirects.config = config.beforeRedirect;
+          options2.beforeRedirects.config = config.beforeRedirect;
         }
         transport = isHttpsRequest ? httpsFollow : httpFollow;
       }
     }
     if (config.maxBodyLength > -1) {
-      options.maxBodyLength = config.maxBodyLength;
+      options2.maxBodyLength = config.maxBodyLength;
     } else {
-      options.maxBodyLength = Infinity;
+      options2.maxBodyLength = Infinity;
     }
     if (config.insecureHTTPParser) {
-      options.insecureHTTPParser = config.insecureHTTPParser;
+      options2.insecureHTTPParser = config.insecureHTTPParser;
     }
-    req = transport.request(options, function handleResponse(res) {
+    req = transport.request(options2, function handleResponse(res) {
       if (req.destroyed) return;
       const streams = [res];
       const responseLength = utils$1.toFiniteNumber(res.headers["content-length"]);
@@ -11777,7 +7592,7 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter2(config) {
       };
       if (responseType === "stream") {
         response.data = responseStream;
-        settle(resolve, reject, response);
+        settle(resolve2, reject, response);
       } else {
         const responseBuffer = [];
         let totalResponseBytes = 0;
@@ -11825,7 +7640,7 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter2(config) {
           } catch (err) {
             return reject(AxiosError$1.from(err, null, config, response.request, response));
           }
-          settle(resolve, reject, response);
+          settle(resolve2, reject, response);
         });
       }
       abortEmitter.once("abort", (err) => {
@@ -12064,7 +7879,7 @@ const resolveConfig = (config) => {
 };
 const isXHRAdapterSupported = typeof XMLHttpRequest !== "undefined";
 const xhrAdapter = isXHRAdapterSupported && function(config) {
-  return new Promise(function dispatchXhrRequest(resolve, reject) {
+  return new Promise(function dispatchXhrRequest(resolve2, reject) {
     const _config = resolveConfig(config);
     let requestData = _config.data;
     const requestHeaders = AxiosHeaders$1.from(_config.headers).normalize();
@@ -12098,7 +7913,7 @@ const xhrAdapter = isXHRAdapterSupported && function(config) {
         request: request2
       };
       settle(function _resolve(value) {
-        resolve(value);
+        resolve2(value);
         done();
       }, function _reject(err) {
         reject(err);
@@ -12442,9 +8257,9 @@ const factory = (env) => {
       let response = await (isRequestSupported ? _fetch(request2, fetchOptions) : _fetch(url, resolvedOptions));
       const isStreamResponse = supportsResponseStream && (responseType === "stream" || responseType === "response");
       if (supportsResponseStream && (onDownloadProgress || isStreamResponse && unsubscribe)) {
-        const options = {};
+        const options2 = {};
         ["status", "statusText", "headers"].forEach((prop) => {
-          options[prop] = response[prop];
+          options2[prop] = response[prop];
         });
         const responseContentLength = utils$1.toFiniteNumber(response.headers.get("content-length"));
         const [onProgress, flush] = onDownloadProgress && progressEventDecorator(
@@ -12456,14 +8271,14 @@ const factory = (env) => {
             flush && flush();
             unsubscribe && unsubscribe();
           }),
-          options
+          options2
         );
       }
       responseType = responseType || "text";
       let responseData = await resolvers[utils$1.findKey(resolvers, responseType) || "text"](response, config);
       !isStreamResponse && unsubscribe && unsubscribe();
-      return await new Promise((resolve, reject) => {
-        settle(resolve, reject, {
+      return await new Promise((resolve2, reject) => {
+        settle(resolve2, reject, {
           data: responseData,
           headers: AxiosHeaders$1.from(response.headers),
           status: response.status,
@@ -12647,18 +8462,18 @@ validators$1.spelling = function spelling(correctSpelling) {
     return true;
   };
 };
-function assertOptions(options, schema, allowUnknown) {
-  if (typeof options !== "object") {
+function assertOptions(options2, schema, allowUnknown) {
+  if (typeof options2 !== "object") {
     throw new AxiosError$1("options must be an object", AxiosError$1.ERR_BAD_OPTION_VALUE);
   }
-  const keys = Object.keys(options);
+  const keys = Object.keys(options2);
   let i = keys.length;
   while (i-- > 0) {
     const opt = keys[i];
     const validator2 = schema[opt];
     if (validator2) {
-      const value = options[opt];
-      const result = value === void 0 || validator2(value, opt, options);
+      const value = options2[opt];
+      const result = value === void 0 || validator2(value, opt, options2);
       if (result !== true) {
         throw new AxiosError$1("option " + opt + " must be " + result, AxiosError$1.ERR_BAD_OPTION_VALUE);
       }
@@ -12848,8 +8663,8 @@ let CancelToken$1 = class CancelToken {
       throw new TypeError("executor must be a function.");
     }
     let resolvePromise;
-    this.promise = new Promise(function promiseExecutor(resolve) {
-      resolvePromise = resolve;
+    this.promise = new Promise(function promiseExecutor(resolve2) {
+      resolvePromise = resolve2;
     });
     const token = this;
     this.promise.then((cancel) => {
@@ -12862,9 +8677,9 @@ let CancelToken$1 = class CancelToken {
     });
     this.promise.then = (onfulfilled) => {
       let _resolve;
-      const promise = new Promise((resolve) => {
-        token.subscribe(resolve);
-        _resolve = resolve;
+      const promise = new Promise((resolve2) => {
+        token.subscribe(resolve2);
+        _resolve = resolve2;
       }).then(onfulfilled);
       promise.cancel = function reject() {
         token.unsubscribe(_resolve);
@@ -13067,24 +8882,4528 @@ const {
   getAdapter,
   mergeConfig
 } = axios;
-const JIKAN_API_URL = "https://api.jikan.moe/v4";
-const malHandler = {
+const VIDEO_EXTENSIONS = [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"];
+const SUBTITLE_EXTENSIONS = [".srt", ".vtt", ".ass", ".ssa"];
+function isVideoFile(filename) {
+  return VIDEO_EXTENSIONS.includes(extname(filename).toLowerCase());
+}
+function isSubtitleFile(filename) {
+  return SUBTITLE_EXTENSIONS.includes(extname(filename).toLowerCase());
+}
+function getBaseName(filename) {
+  return basename(filename, extname(filename));
+}
+function extractSeasonAndEpisode(filename) {
+  const baseName = getBaseName(filename);
+  const seasonEpisodeMatch = baseName.match(/\bS(\d+)E(\d+)\b/i);
+  if (seasonEpisodeMatch) {
+    return {
+      season: parseInt(seasonEpisodeMatch[1], 10),
+      episode: parseInt(seasonEpisodeMatch[2], 10)
+    };
+  }
+  const decimalEpisodeMatch = baseName.match(/Episode\s*(\d+)\.(\d+)/i);
+  if (decimalEpisodeMatch) {
+    const whole = parseInt(decimalEpisodeMatch[1], 10);
+    const decimal = parseInt(decimalEpisodeMatch[2], 10);
+    return {
+      season: null,
+      episode: whole + decimal / 10
+    };
+  }
+  const patterns = [
+    /Episode\s*(\d+)/i,
+    // "Episode 10" or "Episode10"
+    /Ep\.?\s*(\d+)/i,
+    // "Ep 10" or "Ep.10"
+    /E(\d{2,})/i,
+    // "E10" (at least 2 digits)
+    /\s-\s*(\d+)(?:\s|$)/,
+    // " - 10 " or " - 10" at end
+    /\[(\d+)\]/,
+    // "[10]"
+    /\s(\d{1,3})(?:\s|$)/
+    // " 10 " or " 10" at end (1-3 digit episode)
+  ];
+  for (const pattern of patterns) {
+    const match = baseName.match(pattern);
+    if (match) {
+      return {
+        season: null,
+        episode: parseInt(match[1], 10)
+      };
+    }
+  }
+  const numbers = baseName.match(/\d+/g);
+  if (numbers && numbers.length > 0) {
+    const nonYearNumbers = numbers.filter((n) => {
+      const num = parseInt(n, 10);
+      return num < 1900 || num > 2099;
+    });
+    if (nonYearNumbers.length > 0) {
+      return {
+        season: null,
+        episode: parseInt(nonYearNumbers[nonYearNumbers.length - 1], 10)
+      };
+    }
+  }
+  return { season: null, episode: 1 };
+}
+function extractSeasonNumber(folderName) {
+  const patterns = [
+    /Season\s*(\d+)/i,
+    // "Season 1" or "Season1"
+    /\bS(\d+)\b/i,
+    // "S01" or "S1"
+    /Season\s*(\d+)/i
+    // "Season 1"
+  ];
+  for (const pattern of patterns) {
+    const match = folderName.match(pattern);
+    if (match) {
+      return parseInt(match[1], 10);
+    }
+  }
+  return null;
+}
+function extractPartNumber(folderName) {
+  const patterns = [
+    /Part\s*(\d+)/i,
+    // "Part 1" or "Part1"
+    /\bP(\d+)\b/i
+    // "P1" or "P01"
+  ];
+  for (const pattern of patterns) {
+    const match = folderName.match(pattern);
+    if (match) {
+      return parseInt(match[1], 10);
+    }
+  }
+  return null;
+}
+function extractSeriesNameFromFilenames(videoFiles) {
+  if (videoFiles.length === 0) {
+    return "";
+  }
+  const cleanedNames = videoFiles.map((video) => {
+    const baseName = getBaseName(video.filename);
+    let cleaned = baseName.replace(/\s*\bS\d+E\d+(\.\d+)?\b.*$/i, "").replace(/\s*\bE\d+(\.\d+)?\b.*$/i, "").replace(/\s*\bPart\s*\d+\b.*$/i, "").replace(/\s*\bSeason\s*\d+\b.*$/i, "").replace(/\s*Episode\s*\d+(\.\d+)?[ab]?\s*.*$/i, "").replace(/\s*Ep\.?\s*\d+(\.\d+)?[ab]?\s*.*$/i, "").replace(/\s*\[\d+(\.\d+)?[ab]?\].*$/, "").replace(/\s*-\s*\d{1,4}(?:\.\d+)?[ab]?(?:\s|$).*$/, "").replace(/\s+\d{1,3}(?!\d)(?:\s|$)/g, "").replace(/\s*\[(?:1080|720|480|360)p?\]\s*/gi, " ").replace(/\s*\[(?:HD|SD|FHD|UHD)\]?\s*/gi, " ").replace(/\s*\(\d{4}\)\s*$/, "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\./g, " ").replace(/_/g, " ").replace(/\s+/g, " ").trim();
+    return cleaned;
+  });
+  if (cleanedNames.length === 1) {
+    return cleanedNames[0];
+  }
+  cleanedNames.sort((a, b) => a.length - b.length);
+  const shortest = cleanedNames[0];
+  let commonPrefix = "";
+  for (let i = 0; i < shortest.length; i++) {
+    const char = shortest[i];
+    if (cleanedNames.every((name) => name[i] === char)) {
+      commonPrefix += char;
+    } else {
+      break;
+    }
+  }
+  let result = commonPrefix.replace(/[-_\s]+$/, "").trim();
+  if (result.length < 3) {
+    const firstFileWords = cleanedNames[0].split(/\s+/).filter((w) => w.length > 0);
+    const commonWords = [];
+    for (let i = 0; i < firstFileWords.length; i++) {
+      const word = firstFileWords[i];
+      if (cleanedNames.every((name) => {
+        const words = name.split(/\s+/).filter((w) => w.length > 0);
+        return i < words.length && words[i] === word;
+      })) {
+        commonWords.push(word);
+      } else {
+        break;
+      }
+    }
+    result = commonWords.join(" ").trim();
+  }
+  if (!result || result.length < 2) {
+    result = cleanedNames[0];
+  }
+  result = result.replace(/\s*-\s*$/, "").replace(/\s+\d+\s*$/, "").trim();
+  if (result.length <= 3 && /^\d+$/.test(result)) {
+    return result;
+  }
+  return result;
+}
+function generateSeriesId(seriesName, folderName, seasonNumber, partNumber) {
+  let baseId;
+  if (seriesName && seriesName.length >= 2) {
+    baseId = seriesName.replace(/[^a-zA-Z0-9\s]/g, "").replace(/\s+/g, "_").toLowerCase().substring(0, 50);
+  } else {
+    baseId = folderName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+  }
+  if (partNumber !== null) {
+    return `${baseId}_part${partNumber.toString().padStart(2, "0")}`;
+  }
+  if (seasonNumber !== null) {
+    return `${baseId}_s${seasonNumber.toString().padStart(2, "0")}`;
+  }
+  return baseId;
+}
+function cleanMovieTitle(filename) {
+  const baseName = getBaseName(filename);
+  return baseName.replace(/\s*\(.*?\)\s*/g, "").replace(/\s*\[.*?\]\s*/g, "").replace(/\.\d{4}\./g, " ").replace(/\./g, " ").replace(/_/g, " ").replace(/\s+/g, " ").trim();
+}
+async function scanFolderForVideos(folderPath, folderSeason = null) {
+  const videos = [];
+  const subtitles = /* @__PURE__ */ new Map();
+  const folderName = basename(folderPath);
+  const seasonFromFolder = folderSeason ?? extractSeasonNumber(folderName);
+  try {
+    const entries = await readdir(folderPath);
+    for (const entry of entries) {
+      const fullPath = join$1(folderPath, entry);
+      try {
+        const stats = await stat(fullPath);
+        if (stats.isFile()) {
+          if (isVideoFile(entry)) {
+            const { season, episode } = extractSeasonAndEpisode(entry);
+            const finalSeason = season ?? seasonFromFolder;
+            videos.push({
+              filename: entry,
+              filePath: fullPath,
+              title: getBaseName(entry),
+              episodeNumber: episode,
+              seasonNumber: finalSeason,
+              subtitlePath: null,
+              subtitlePaths: [],
+              parentFolder: folderName
+            });
+          } else if (isSubtitleFile(entry)) {
+            const baseName = getBaseName(entry);
+            const existing = subtitles.get(baseName) || [];
+            existing.push(fullPath);
+            subtitles.set(baseName, existing);
+          }
+        }
+      } catch (err) {
+        console.warn(`Could not stat: ${fullPath}`);
+      }
+    }
+    for (const video of videos) {
+      const videoBase = getBaseName(video.filename);
+      const matchingSubs = subtitles.get(videoBase) || [];
+      if (matchingSubs.length > 0) {
+        video.subtitlePath = matchingSubs[0];
+        video.subtitlePaths = matchingSubs;
+      }
+    }
+    const seenPaths = /* @__PURE__ */ new Set();
+    const uniqueVideos = videos.filter((video) => {
+      if (seenPaths.has(video.filePath)) {
+        console.warn(`Duplicate video file detected: ${video.filePath}`);
+        return false;
+      }
+      seenPaths.add(video.filePath);
+      return true;
+    });
+    return { videos: uniqueVideos, subtitles };
+  } catch (error) {
+    console.error(`Error scanning folder ${folderPath}:`, error);
+  }
+  return { videos: [], subtitles };
+}
+async function scanDirectory(rootPath) {
+  const results = [];
+  console.log(`
+=== Scanning: ${rootPath} ===`);
+  try {
+    const entries = await readdir(rootPath);
+    for (const entry of entries) {
+      const entryPath = join$1(rootPath, entry);
+      try {
+        const stats = await stat(entryPath);
+        if (stats.isDirectory()) {
+          const { videos: subVideos } = await scanFolderForVideos(entryPath);
+          const subEntries = await readdir(entryPath);
+          const subDirs = [];
+          for (const subEntry of subEntries) {
+            const subPath = join$1(entryPath, subEntry);
+            try {
+              const subStats = await stat(subPath);
+              if (subStats.isDirectory()) {
+                subDirs.push(subEntry);
+              }
+            } catch {
+            }
+          }
+          if (subDirs.length > 0 && subVideos.length === 0) {
+            console.log(`  📁 Category folder: ${entry}`);
+            for (const subDir of subDirs) {
+              const seriesPath = join$1(entryPath, subDir);
+              const seasonFromFolder = extractSeasonNumber(subDir);
+              const partFromFolder = extractPartNumber(subDir);
+              const { videos } = await scanFolderForVideos(seriesPath, seasonFromFolder);
+              if (videos.length > 0) {
+                const seriesName = extractSeriesNameFromFilenames(videos);
+                const seriesId = generateSeriesId(seriesName, subDir, seasonFromFolder, partFromFolder);
+                const partInfo = partFromFolder ? `, Part ${partFromFolder}` : "";
+                const seasonInfo = seasonFromFolder ? `, Season ${seasonFromFolder}` : "";
+                console.log(`    📺 Series: ${subDir} (${videos.length} episodes${seasonInfo}${partInfo}) → search: "${seriesName}" → ID: "${seriesId}"`);
+                results.push({
+                  id: seriesId,
+                  name: seriesName,
+                  type: "series",
+                  folderPath: seriesPath,
+                  files: videos.sort((a, b) => {
+                    const seasonA = a.seasonNumber ?? 0;
+                    const seasonB = b.seasonNumber ?? 0;
+                    if (seasonA !== seasonB) return seasonA - seasonB;
+                    return a.episodeNumber - b.episodeNumber;
+                  }),
+                  seasonNumber: seasonFromFolder,
+                  partNumber: partFromFolder
+                });
+              }
+            }
+            if (subVideos.length > 0) {
+              console.log(`    🎬 Loose videos in ${entry}: ${subVideos.length}`);
+              for (const video of subVideos) {
+                const movieTitle = cleanMovieTitle(video.filename);
+                const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+                console.log(`      🎬 Movie: ${video.filename} → search: "${movieTitle}"`);
+                results.push({
+                  id: `movie_${movieId}`,
+                  name: movieTitle,
+                  type: "movie",
+                  folderPath: entryPath,
+                  files: [video],
+                  seasonNumber: null,
+                  partNumber: null
+                });
+              }
+            }
+          } else if (subVideos.length > 0) {
+            const seriesName = extractSeriesNameFromFilenames(subVideos);
+            const seasonFromFolder = extractSeasonNumber(entry);
+            const partFromFolder = extractPartNumber(entry);
+            const seriesId = generateSeriesId(seriesName, entry, seasonFromFolder, partFromFolder);
+            const partInfo = partFromFolder ? `, Part ${partFromFolder}` : "";
+            const seasonInfo = seasonFromFolder ? `, Season ${seasonFromFolder}` : "";
+            console.log(`  📺 Series: ${entry} (${subVideos.length} episode${subVideos.length > 1 ? "s" : ""}${seasonInfo}${partInfo}) → search: "${seriesName}" → ID: "${seriesId}"`);
+            results.push({
+              id: seriesId,
+              name: seriesName,
+              type: "series",
+              folderPath: entryPath,
+              files: subVideos.sort((a, b) => {
+                const seasonA = a.seasonNumber ?? 0;
+                const seasonB = b.seasonNumber ?? 0;
+                if (seasonA !== seasonB) return seasonA - seasonB;
+                return a.episodeNumber - b.episodeNumber;
+              }),
+              seasonNumber: seasonFromFolder,
+              partNumber: partFromFolder
+            });
+          }
+        } else if (stats.isFile() && isVideoFile(entry)) {
+          const movieTitle = cleanMovieTitle(entry);
+          const movieId = movieTitle.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+          console.log(`  🎬 Movie (root): ${entry} → search: "${movieTitle}"`);
+          const { episode: movieEpisode } = extractSeasonAndEpisode(entry);
+          results.push({
+            id: `movie_${movieId}`,
+            name: movieTitle,
+            type: "movie",
+            folderPath: rootPath,
+            files: [{
+              filename: entry,
+              filePath: entryPath,
+              title: getBaseName(entry),
+              episodeNumber: movieEpisode,
+              seasonNumber: null,
+              subtitlePath: null,
+              subtitlePaths: [],
+              parentFolder: basename(rootPath)
+            }],
+            seasonNumber: null,
+            partNumber: null
+          });
+        }
+      } catch (err) {
+        console.warn(`Could not process ${entryPath}:`, err);
+      }
+    }
+  } catch (error) {
+    console.error(`Error scanning root directory ${rootPath}:`, error);
+    throw error;
+  }
+  console.log(`=== Found ${results.length} media items ===
+`);
+  return results;
+}
+const folderHandler = {
+  async scanFolder(folderPath) {
+    if (!folderPath) {
+      throw new Error("Folder path is required");
+    }
+    try {
+      const stats = await stat(folderPath);
+      if (!stats.isDirectory()) {
+        throw new Error(`Path is not a directory: ${folderPath}`);
+      }
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        throw new Error(`Folder does not exist: ${folderPath}`);
+      }
+      throw error;
+    }
+    return await scanDirectory(folderPath);
+  },
+  async scanMultipleFolders(folderPaths) {
+    const allResults = [];
+    for (const folderPath of folderPaths) {
+      try {
+        const results = await scanDirectory(folderPath);
+        allResults.push(...results);
+      } catch (error) {
+        console.error(`Error scanning ${folderPath}:`, error);
+      }
+    }
+    return allResults;
+  }
+};
+class ClientError extends Error {
+  response;
+  request;
+  constructor(response, request2) {
+    const message = `${ClientError.extractMessage(response)}: ${JSON.stringify({
+      response,
+      request: request2
+    })}`;
+    super(message);
+    Object.setPrototypeOf(this, ClientError.prototype);
+    this.response = response;
+    this.request = request2;
+    if (typeof Error.captureStackTrace === `function`) {
+      Error.captureStackTrace(this, ClientError);
+    }
+  }
+  static extractMessage(response) {
+    return response.errors?.[0]?.message ?? `GraphQL Error (Code: ${String(response.status)})`;
+  }
+}
+const uppercase = (str) => str.toUpperCase();
+const callOrIdentity = (value) => {
+  return typeof value === `function` ? value() : value;
+};
+const zip = (a, b) => a.map((k, i) => [k, b[i]]);
+const HeadersInitToPlainObject = (headers) => {
+  let oHeaders = {};
+  if (headers instanceof Headers) {
+    oHeaders = HeadersInstanceToPlainObject(headers);
+  } else if (Array.isArray(headers)) {
+    headers.forEach(([name, value]) => {
+      if (name && value !== void 0) {
+        oHeaders[name] = value;
+      }
+    });
+  } else if (headers) {
+    oHeaders = headers;
+  }
+  return oHeaders;
+};
+const HeadersInstanceToPlainObject = (headers) => {
+  const o = {};
+  headers.forEach((v, k) => {
+    o[k] = v;
+  });
+  return o;
+};
+const tryCatch = (fn) => {
+  try {
+    const result = fn();
+    if (isPromiseLikeValue(result)) {
+      return result.catch((error) => {
+        return errorFromMaybeError(error);
+      });
+    }
+    return result;
+  } catch (error) {
+    return errorFromMaybeError(error);
+  }
+};
+const errorFromMaybeError = (maybeError) => {
+  if (maybeError instanceof Error)
+    return maybeError;
+  return new Error(String(maybeError));
+};
+const isPromiseLikeValue = (value) => {
+  return typeof value === `object` && value !== null && `then` in value && typeof value.then === `function` && `catch` in value && typeof value.catch === `function` && `finally` in value && typeof value.finally === `function`;
+};
+const casesExhausted = (value) => {
+  throw new Error(`Unhandled case: ${String(value)}`);
+};
+const isPlainObject = (value) => {
+  return typeof value === `object` && value !== null && !Array.isArray(value);
+};
+const parseBatchRequestArgs = (documentsOrOptions, requestHeaders) => {
+  return documentsOrOptions.documents ? documentsOrOptions : {
+    documents: documentsOrOptions,
+    requestHeaders,
+    signal: void 0
+  };
+};
+const parseRawRequestArgs = (queryOrOptions, variables, requestHeaders) => {
+  return queryOrOptions.query ? queryOrOptions : {
+    query: queryOrOptions,
+    variables,
+    requestHeaders,
+    signal: void 0
+  };
+};
+function devAssert(condition, message) {
+  const booleanCondition = Boolean(condition);
+  if (!booleanCondition) {
+    throw new Error(message);
+  }
+}
+function isObjectLike(value) {
+  return typeof value == "object" && value !== null;
+}
+function invariant(condition, message) {
+  const booleanCondition = Boolean(condition);
+  if (!booleanCondition) {
+    throw new Error(
+      "Unexpected invariant triggered."
+    );
+  }
+}
+const LineRegExp = /\r\n|[\n\r]/g;
+function getLocation(source, position) {
+  let lastLineStart = 0;
+  let line = 1;
+  for (const match of source.body.matchAll(LineRegExp)) {
+    typeof match.index === "number" || invariant(false);
+    if (match.index >= position) {
+      break;
+    }
+    lastLineStart = match.index + match[0].length;
+    line += 1;
+  }
+  return {
+    line,
+    column: position + 1 - lastLineStart
+  };
+}
+function printLocation(location) {
+  return printSourceLocation(
+    location.source,
+    getLocation(location.source, location.start)
+  );
+}
+function printSourceLocation(source, sourceLocation) {
+  const firstLineColumnOffset = source.locationOffset.column - 1;
+  const body = "".padStart(firstLineColumnOffset) + source.body;
+  const lineIndex = sourceLocation.line - 1;
+  const lineOffset = source.locationOffset.line - 1;
+  const lineNum = sourceLocation.line + lineOffset;
+  const columnOffset = sourceLocation.line === 1 ? firstLineColumnOffset : 0;
+  const columnNum = sourceLocation.column + columnOffset;
+  const locationStr = `${source.name}:${lineNum}:${columnNum}
+`;
+  const lines = body.split(/\r\n|[\n\r]/g);
+  const locationLine = lines[lineIndex];
+  if (locationLine.length > 120) {
+    const subLineIndex = Math.floor(columnNum / 80);
+    const subLineColumnNum = columnNum % 80;
+    const subLines = [];
+    for (let i = 0; i < locationLine.length; i += 80) {
+      subLines.push(locationLine.slice(i, i + 80));
+    }
+    return locationStr + printPrefixedLines([
+      [`${lineNum} |`, subLines[0]],
+      ...subLines.slice(1, subLineIndex + 1).map((subLine) => ["|", subLine]),
+      ["|", "^".padStart(subLineColumnNum)],
+      ["|", subLines[subLineIndex + 1]]
+    ]);
+  }
+  return locationStr + printPrefixedLines([
+    // Lines specified like this: ["prefix", "string"],
+    [`${lineNum - 1} |`, lines[lineIndex - 1]],
+    [`${lineNum} |`, locationLine],
+    ["|", "^".padStart(columnNum)],
+    [`${lineNum + 1} |`, lines[lineIndex + 1]]
+  ]);
+}
+function printPrefixedLines(lines) {
+  const existingLines = lines.filter(([_, line]) => line !== void 0);
+  const padLen = Math.max(...existingLines.map(([prefix]) => prefix.length));
+  return existingLines.map(([prefix, line]) => prefix.padStart(padLen) + (line ? " " + line : "")).join("\n");
+}
+function toNormalizedOptions(args) {
+  const firstArg = args[0];
+  if (firstArg == null || "kind" in firstArg || "length" in firstArg) {
+    return {
+      nodes: firstArg,
+      source: args[1],
+      positions: args[2],
+      path: args[3],
+      originalError: args[4],
+      extensions: args[5]
+    };
+  }
+  return firstArg;
+}
+class GraphQLError extends Error {
+  /**
+   * An array of `{ line, column }` locations within the source GraphQL document
+   * which correspond to this error.
+   *
+   * Errors during validation often contain multiple locations, for example to
+   * point out two things with the same name. Errors during execution include a
+   * single location, the field which produced the error.
+   *
+   * Enumerable, and appears in the result of JSON.stringify().
+   */
+  /**
+   * An array describing the JSON-path into the execution response which
+   * corresponds to this error. Only included for errors during execution.
+   *
+   * Enumerable, and appears in the result of JSON.stringify().
+   */
+  /**
+   * An array of GraphQL AST Nodes corresponding to this error.
+   */
+  /**
+   * The source GraphQL document for the first location of this error.
+   *
+   * Note that if this Error represents more than one node, the source may not
+   * represent nodes after the first node.
+   */
+  /**
+   * An array of character offsets within the source GraphQL document
+   * which correspond to this error.
+   */
+  /**
+   * The original error thrown from a field resolver during execution.
+   */
+  /**
+   * Extension fields to add to the formatted error.
+   */
+  /**
+   * @deprecated Please use the `GraphQLErrorOptions` constructor overload instead.
+   */
+  constructor(message, ...rawArgs) {
+    var _this$nodes, _nodeLocations$, _ref;
+    const { nodes, source, positions, path, originalError, extensions } = toNormalizedOptions(rawArgs);
+    super(message);
+    this.name = "GraphQLError";
+    this.path = path !== null && path !== void 0 ? path : void 0;
+    this.originalError = originalError !== null && originalError !== void 0 ? originalError : void 0;
+    this.nodes = undefinedIfEmpty(
+      Array.isArray(nodes) ? nodes : nodes ? [nodes] : void 0
+    );
+    const nodeLocations = undefinedIfEmpty(
+      (_this$nodes = this.nodes) === null || _this$nodes === void 0 ? void 0 : _this$nodes.map((node2) => node2.loc).filter((loc) => loc != null)
+    );
+    this.source = source !== null && source !== void 0 ? source : nodeLocations === null || nodeLocations === void 0 ? void 0 : (_nodeLocations$ = nodeLocations[0]) === null || _nodeLocations$ === void 0 ? void 0 : _nodeLocations$.source;
+    this.positions = positions !== null && positions !== void 0 ? positions : nodeLocations === null || nodeLocations === void 0 ? void 0 : nodeLocations.map((loc) => loc.start);
+    this.locations = positions && source ? positions.map((pos) => getLocation(source, pos)) : nodeLocations === null || nodeLocations === void 0 ? void 0 : nodeLocations.map((loc) => getLocation(loc.source, loc.start));
+    const originalExtensions = isObjectLike(
+      originalError === null || originalError === void 0 ? void 0 : originalError.extensions
+    ) ? originalError === null || originalError === void 0 ? void 0 : originalError.extensions : void 0;
+    this.extensions = (_ref = extensions !== null && extensions !== void 0 ? extensions : originalExtensions) !== null && _ref !== void 0 ? _ref : /* @__PURE__ */ Object.create(null);
+    Object.defineProperties(this, {
+      message: {
+        writable: true,
+        enumerable: true
+      },
+      name: {
+        enumerable: false
+      },
+      nodes: {
+        enumerable: false
+      },
+      source: {
+        enumerable: false
+      },
+      positions: {
+        enumerable: false
+      },
+      originalError: {
+        enumerable: false
+      }
+    });
+    if (originalError !== null && originalError !== void 0 && originalError.stack) {
+      Object.defineProperty(this, "stack", {
+        value: originalError.stack,
+        writable: true,
+        configurable: true
+      });
+    } else if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, GraphQLError);
+    } else {
+      Object.defineProperty(this, "stack", {
+        value: Error().stack,
+        writable: true,
+        configurable: true
+      });
+    }
+  }
+  get [Symbol.toStringTag]() {
+    return "GraphQLError";
+  }
+  toString() {
+    let output = this.message;
+    if (this.nodes) {
+      for (const node2 of this.nodes) {
+        if (node2.loc) {
+          output += "\n\n" + printLocation(node2.loc);
+        }
+      }
+    } else if (this.source && this.locations) {
+      for (const location of this.locations) {
+        output += "\n\n" + printSourceLocation(this.source, location);
+      }
+    }
+    return output;
+  }
+  toJSON() {
+    const formattedError = {
+      message: this.message
+    };
+    if (this.locations != null) {
+      formattedError.locations = this.locations;
+    }
+    if (this.path != null) {
+      formattedError.path = this.path;
+    }
+    if (this.extensions != null && Object.keys(this.extensions).length > 0) {
+      formattedError.extensions = this.extensions;
+    }
+    return formattedError;
+  }
+}
+function undefinedIfEmpty(array) {
+  return array === void 0 || array.length === 0 ? void 0 : array;
+}
+function syntaxError(source, position, description) {
+  return new GraphQLError(`Syntax Error: ${description}`, {
+    source,
+    positions: [position]
+  });
+}
+class Location {
+  /**
+   * The character offset at which this Node begins.
+   */
+  /**
+   * The character offset at which this Node ends.
+   */
+  /**
+   * The Token at which this Node begins.
+   */
+  /**
+   * The Token at which this Node ends.
+   */
+  /**
+   * The Source document the AST represents.
+   */
+  constructor(startToken, endToken, source) {
+    this.start = startToken.start;
+    this.end = endToken.end;
+    this.startToken = startToken;
+    this.endToken = endToken;
+    this.source = source;
+  }
+  get [Symbol.toStringTag]() {
+    return "Location";
+  }
+  toJSON() {
+    return {
+      start: this.start,
+      end: this.end
+    };
+  }
+}
+class Token {
+  /**
+   * The kind of Token.
+   */
+  /**
+   * The character offset at which this Node begins.
+   */
+  /**
+   * The character offset at which this Node ends.
+   */
+  /**
+   * The 1-indexed line number on which this Token appears.
+   */
+  /**
+   * The 1-indexed column number at which this Token begins.
+   */
+  /**
+   * For non-punctuation tokens, represents the interpreted value of the token.
+   *
+   * Note: is undefined for punctuation tokens, but typed as string for
+   * convenience in the parser.
+   */
+  /**
+   * Tokens exist as nodes in a double-linked-list amongst all tokens
+   * including ignored tokens. <SOF> is always the first node and <EOF>
+   * the last.
+   */
+  constructor(kind, start, end, line, column, value) {
+    this.kind = kind;
+    this.start = start;
+    this.end = end;
+    this.line = line;
+    this.column = column;
+    this.value = value;
+    this.prev = null;
+    this.next = null;
+  }
+  get [Symbol.toStringTag]() {
+    return "Token";
+  }
+  toJSON() {
+    return {
+      kind: this.kind,
+      value: this.value,
+      line: this.line,
+      column: this.column
+    };
+  }
+}
+const QueryDocumentKeys = {
+  Name: [],
+  Document: ["definitions"],
+  OperationDefinition: [
+    "description",
+    "name",
+    "variableDefinitions",
+    "directives",
+    "selectionSet"
+  ],
+  VariableDefinition: [
+    "description",
+    "variable",
+    "type",
+    "defaultValue",
+    "directives"
+  ],
+  Variable: ["name"],
+  SelectionSet: ["selections"],
+  Field: ["alias", "name", "arguments", "directives", "selectionSet"],
+  Argument: ["name", "value"],
+  FragmentSpread: ["name", "directives"],
+  InlineFragment: ["typeCondition", "directives", "selectionSet"],
+  FragmentDefinition: [
+    "description",
+    "name",
+    // Note: fragment variable definitions are deprecated and will removed in v17.0.0
+    "variableDefinitions",
+    "typeCondition",
+    "directives",
+    "selectionSet"
+  ],
+  IntValue: [],
+  FloatValue: [],
+  StringValue: [],
+  BooleanValue: [],
+  NullValue: [],
+  EnumValue: [],
+  ListValue: ["values"],
+  ObjectValue: ["fields"],
+  ObjectField: ["name", "value"],
+  Directive: ["name", "arguments"],
+  NamedType: ["name"],
+  ListType: ["type"],
+  NonNullType: ["type"],
+  SchemaDefinition: ["description", "directives", "operationTypes"],
+  OperationTypeDefinition: ["type"],
+  ScalarTypeDefinition: ["description", "name", "directives"],
+  ObjectTypeDefinition: [
+    "description",
+    "name",
+    "interfaces",
+    "directives",
+    "fields"
+  ],
+  FieldDefinition: ["description", "name", "arguments", "type", "directives"],
+  InputValueDefinition: [
+    "description",
+    "name",
+    "type",
+    "defaultValue",
+    "directives"
+  ],
+  InterfaceTypeDefinition: [
+    "description",
+    "name",
+    "interfaces",
+    "directives",
+    "fields"
+  ],
+  UnionTypeDefinition: ["description", "name", "directives", "types"],
+  EnumTypeDefinition: ["description", "name", "directives", "values"],
+  EnumValueDefinition: ["description", "name", "directives"],
+  InputObjectTypeDefinition: ["description", "name", "directives", "fields"],
+  DirectiveDefinition: ["description", "name", "arguments", "locations"],
+  SchemaExtension: ["directives", "operationTypes"],
+  ScalarTypeExtension: ["name", "directives"],
+  ObjectTypeExtension: ["name", "interfaces", "directives", "fields"],
+  InterfaceTypeExtension: ["name", "interfaces", "directives", "fields"],
+  UnionTypeExtension: ["name", "directives", "types"],
+  EnumTypeExtension: ["name", "directives", "values"],
+  InputObjectTypeExtension: ["name", "directives", "fields"],
+  TypeCoordinate: ["name"],
+  MemberCoordinate: ["name", "memberName"],
+  ArgumentCoordinate: ["name", "fieldName", "argumentName"],
+  DirectiveCoordinate: ["name"],
+  DirectiveArgumentCoordinate: ["name", "argumentName"]
+};
+const kindValues = new Set(Object.keys(QueryDocumentKeys));
+function isNode(maybeNode) {
+  const maybeKind = maybeNode === null || maybeNode === void 0 ? void 0 : maybeNode.kind;
+  return typeof maybeKind === "string" && kindValues.has(maybeKind);
+}
+var OperationTypeNode;
+(function(OperationTypeNode2) {
+  OperationTypeNode2["QUERY"] = "query";
+  OperationTypeNode2["MUTATION"] = "mutation";
+  OperationTypeNode2["SUBSCRIPTION"] = "subscription";
+})(OperationTypeNode || (OperationTypeNode = {}));
+var DirectiveLocation;
+(function(DirectiveLocation2) {
+  DirectiveLocation2["QUERY"] = "QUERY";
+  DirectiveLocation2["MUTATION"] = "MUTATION";
+  DirectiveLocation2["SUBSCRIPTION"] = "SUBSCRIPTION";
+  DirectiveLocation2["FIELD"] = "FIELD";
+  DirectiveLocation2["FRAGMENT_DEFINITION"] = "FRAGMENT_DEFINITION";
+  DirectiveLocation2["FRAGMENT_SPREAD"] = "FRAGMENT_SPREAD";
+  DirectiveLocation2["INLINE_FRAGMENT"] = "INLINE_FRAGMENT";
+  DirectiveLocation2["VARIABLE_DEFINITION"] = "VARIABLE_DEFINITION";
+  DirectiveLocation2["SCHEMA"] = "SCHEMA";
+  DirectiveLocation2["SCALAR"] = "SCALAR";
+  DirectiveLocation2["OBJECT"] = "OBJECT";
+  DirectiveLocation2["FIELD_DEFINITION"] = "FIELD_DEFINITION";
+  DirectiveLocation2["ARGUMENT_DEFINITION"] = "ARGUMENT_DEFINITION";
+  DirectiveLocation2["INTERFACE"] = "INTERFACE";
+  DirectiveLocation2["UNION"] = "UNION";
+  DirectiveLocation2["ENUM"] = "ENUM";
+  DirectiveLocation2["ENUM_VALUE"] = "ENUM_VALUE";
+  DirectiveLocation2["INPUT_OBJECT"] = "INPUT_OBJECT";
+  DirectiveLocation2["INPUT_FIELD_DEFINITION"] = "INPUT_FIELD_DEFINITION";
+})(DirectiveLocation || (DirectiveLocation = {}));
+var Kind;
+(function(Kind2) {
+  Kind2["NAME"] = "Name";
+  Kind2["DOCUMENT"] = "Document";
+  Kind2["OPERATION_DEFINITION"] = "OperationDefinition";
+  Kind2["VARIABLE_DEFINITION"] = "VariableDefinition";
+  Kind2["SELECTION_SET"] = "SelectionSet";
+  Kind2["FIELD"] = "Field";
+  Kind2["ARGUMENT"] = "Argument";
+  Kind2["FRAGMENT_SPREAD"] = "FragmentSpread";
+  Kind2["INLINE_FRAGMENT"] = "InlineFragment";
+  Kind2["FRAGMENT_DEFINITION"] = "FragmentDefinition";
+  Kind2["VARIABLE"] = "Variable";
+  Kind2["INT"] = "IntValue";
+  Kind2["FLOAT"] = "FloatValue";
+  Kind2["STRING"] = "StringValue";
+  Kind2["BOOLEAN"] = "BooleanValue";
+  Kind2["NULL"] = "NullValue";
+  Kind2["ENUM"] = "EnumValue";
+  Kind2["LIST"] = "ListValue";
+  Kind2["OBJECT"] = "ObjectValue";
+  Kind2["OBJECT_FIELD"] = "ObjectField";
+  Kind2["DIRECTIVE"] = "Directive";
+  Kind2["NAMED_TYPE"] = "NamedType";
+  Kind2["LIST_TYPE"] = "ListType";
+  Kind2["NON_NULL_TYPE"] = "NonNullType";
+  Kind2["SCHEMA_DEFINITION"] = "SchemaDefinition";
+  Kind2["OPERATION_TYPE_DEFINITION"] = "OperationTypeDefinition";
+  Kind2["SCALAR_TYPE_DEFINITION"] = "ScalarTypeDefinition";
+  Kind2["OBJECT_TYPE_DEFINITION"] = "ObjectTypeDefinition";
+  Kind2["FIELD_DEFINITION"] = "FieldDefinition";
+  Kind2["INPUT_VALUE_DEFINITION"] = "InputValueDefinition";
+  Kind2["INTERFACE_TYPE_DEFINITION"] = "InterfaceTypeDefinition";
+  Kind2["UNION_TYPE_DEFINITION"] = "UnionTypeDefinition";
+  Kind2["ENUM_TYPE_DEFINITION"] = "EnumTypeDefinition";
+  Kind2["ENUM_VALUE_DEFINITION"] = "EnumValueDefinition";
+  Kind2["INPUT_OBJECT_TYPE_DEFINITION"] = "InputObjectTypeDefinition";
+  Kind2["DIRECTIVE_DEFINITION"] = "DirectiveDefinition";
+  Kind2["SCHEMA_EXTENSION"] = "SchemaExtension";
+  Kind2["SCALAR_TYPE_EXTENSION"] = "ScalarTypeExtension";
+  Kind2["OBJECT_TYPE_EXTENSION"] = "ObjectTypeExtension";
+  Kind2["INTERFACE_TYPE_EXTENSION"] = "InterfaceTypeExtension";
+  Kind2["UNION_TYPE_EXTENSION"] = "UnionTypeExtension";
+  Kind2["ENUM_TYPE_EXTENSION"] = "EnumTypeExtension";
+  Kind2["INPUT_OBJECT_TYPE_EXTENSION"] = "InputObjectTypeExtension";
+  Kind2["TYPE_COORDINATE"] = "TypeCoordinate";
+  Kind2["MEMBER_COORDINATE"] = "MemberCoordinate";
+  Kind2["ARGUMENT_COORDINATE"] = "ArgumentCoordinate";
+  Kind2["DIRECTIVE_COORDINATE"] = "DirectiveCoordinate";
+  Kind2["DIRECTIVE_ARGUMENT_COORDINATE"] = "DirectiveArgumentCoordinate";
+})(Kind || (Kind = {}));
+function isWhiteSpace(code) {
+  return code === 9 || code === 32;
+}
+function isDigit(code) {
+  return code >= 48 && code <= 57;
+}
+function isLetter(code) {
+  return code >= 97 && code <= 122 || // A-Z
+  code >= 65 && code <= 90;
+}
+function isNameStart(code) {
+  return isLetter(code) || code === 95;
+}
+function isNameContinue(code) {
+  return isLetter(code) || isDigit(code) || code === 95;
+}
+function dedentBlockStringLines(lines) {
+  var _firstNonEmptyLine2;
+  let commonIndent = Number.MAX_SAFE_INTEGER;
+  let firstNonEmptyLine = null;
+  let lastNonEmptyLine = -1;
+  for (let i = 0; i < lines.length; ++i) {
+    var _firstNonEmptyLine;
+    const line = lines[i];
+    const indent2 = leadingWhitespace(line);
+    if (indent2 === line.length) {
+      continue;
+    }
+    firstNonEmptyLine = (_firstNonEmptyLine = firstNonEmptyLine) !== null && _firstNonEmptyLine !== void 0 ? _firstNonEmptyLine : i;
+    lastNonEmptyLine = i;
+    if (i !== 0 && indent2 < commonIndent) {
+      commonIndent = indent2;
+    }
+  }
+  return lines.map((line, i) => i === 0 ? line : line.slice(commonIndent)).slice(
+    (_firstNonEmptyLine2 = firstNonEmptyLine) !== null && _firstNonEmptyLine2 !== void 0 ? _firstNonEmptyLine2 : 0,
+    lastNonEmptyLine + 1
+  );
+}
+function leadingWhitespace(str) {
+  let i = 0;
+  while (i < str.length && isWhiteSpace(str.charCodeAt(i))) {
+    ++i;
+  }
+  return i;
+}
+function printBlockString(value, options2) {
+  const escapedValue = value.replace(/"""/g, '\\"""');
+  const lines = escapedValue.split(/\r\n|[\n\r]/g);
+  const isSingleLine = lines.length === 1;
+  const forceLeadingNewLine = lines.length > 1 && lines.slice(1).every((line) => line.length === 0 || isWhiteSpace(line.charCodeAt(0)));
+  const hasTrailingTripleQuotes = escapedValue.endsWith('\\"""');
+  const hasTrailingQuote = value.endsWith('"') && !hasTrailingTripleQuotes;
+  const hasTrailingSlash = value.endsWith("\\");
+  const forceTrailingNewline = hasTrailingQuote || hasTrailingSlash;
+  const printAsMultipleLines = (
+    // add leading and trailing new lines only if it improves readability
+    !isSingleLine || value.length > 70 || forceTrailingNewline || forceLeadingNewLine || hasTrailingTripleQuotes
+  );
+  let result = "";
+  const skipLeadingNewLine = isSingleLine && isWhiteSpace(value.charCodeAt(0));
+  if (printAsMultipleLines && !skipLeadingNewLine || forceLeadingNewLine) {
+    result += "\n";
+  }
+  result += escapedValue;
+  if (printAsMultipleLines || forceTrailingNewline) {
+    result += "\n";
+  }
+  return '"""' + result + '"""';
+}
+var TokenKind;
+(function(TokenKind2) {
+  TokenKind2["SOF"] = "<SOF>";
+  TokenKind2["EOF"] = "<EOF>";
+  TokenKind2["BANG"] = "!";
+  TokenKind2["DOLLAR"] = "$";
+  TokenKind2["AMP"] = "&";
+  TokenKind2["PAREN_L"] = "(";
+  TokenKind2["PAREN_R"] = ")";
+  TokenKind2["DOT"] = ".";
+  TokenKind2["SPREAD"] = "...";
+  TokenKind2["COLON"] = ":";
+  TokenKind2["EQUALS"] = "=";
+  TokenKind2["AT"] = "@";
+  TokenKind2["BRACKET_L"] = "[";
+  TokenKind2["BRACKET_R"] = "]";
+  TokenKind2["BRACE_L"] = "{";
+  TokenKind2["PIPE"] = "|";
+  TokenKind2["BRACE_R"] = "}";
+  TokenKind2["NAME"] = "Name";
+  TokenKind2["INT"] = "Int";
+  TokenKind2["FLOAT"] = "Float";
+  TokenKind2["STRING"] = "String";
+  TokenKind2["BLOCK_STRING"] = "BlockString";
+  TokenKind2["COMMENT"] = "Comment";
+})(TokenKind || (TokenKind = {}));
+class Lexer {
+  /**
+   * The previously focused non-ignored token.
+   */
+  /**
+   * The currently focused non-ignored token.
+   */
+  /**
+   * The (1-indexed) line containing the current token.
+   */
+  /**
+   * The character offset at which the current line begins.
+   */
+  constructor(source) {
+    const startOfFileToken = new Token(TokenKind.SOF, 0, 0, 0, 0);
+    this.source = source;
+    this.lastToken = startOfFileToken;
+    this.token = startOfFileToken;
+    this.line = 1;
+    this.lineStart = 0;
+  }
+  get [Symbol.toStringTag]() {
+    return "Lexer";
+  }
+  /**
+   * Advances the token stream to the next non-ignored token.
+   */
+  advance() {
+    this.lastToken = this.token;
+    const token = this.token = this.lookahead();
+    return token;
+  }
+  /**
+   * Looks ahead and returns the next non-ignored token, but does not change
+   * the state of Lexer.
+   */
+  lookahead() {
+    let token = this.token;
+    if (token.kind !== TokenKind.EOF) {
+      do {
+        if (token.next) {
+          token = token.next;
+        } else {
+          const nextToken = readNextToken(this, token.end);
+          token.next = nextToken;
+          nextToken.prev = token;
+          token = nextToken;
+        }
+      } while (token.kind === TokenKind.COMMENT);
+    }
+    return token;
+  }
+}
+function isPunctuatorTokenKind(kind) {
+  return kind === TokenKind.BANG || kind === TokenKind.DOLLAR || kind === TokenKind.AMP || kind === TokenKind.PAREN_L || kind === TokenKind.PAREN_R || kind === TokenKind.DOT || kind === TokenKind.SPREAD || kind === TokenKind.COLON || kind === TokenKind.EQUALS || kind === TokenKind.AT || kind === TokenKind.BRACKET_L || kind === TokenKind.BRACKET_R || kind === TokenKind.BRACE_L || kind === TokenKind.PIPE || kind === TokenKind.BRACE_R;
+}
+function isUnicodeScalarValue(code) {
+  return code >= 0 && code <= 55295 || code >= 57344 && code <= 1114111;
+}
+function isSupplementaryCodePoint(body, location) {
+  return isLeadingSurrogate(body.charCodeAt(location)) && isTrailingSurrogate(body.charCodeAt(location + 1));
+}
+function isLeadingSurrogate(code) {
+  return code >= 55296 && code <= 56319;
+}
+function isTrailingSurrogate(code) {
+  return code >= 56320 && code <= 57343;
+}
+function printCodePointAt(lexer, location) {
+  const code = lexer.source.body.codePointAt(location);
+  if (code === void 0) {
+    return TokenKind.EOF;
+  } else if (code >= 32 && code <= 126) {
+    const char = String.fromCodePoint(code);
+    return char === '"' ? `'"'` : `"${char}"`;
+  }
+  return "U+" + code.toString(16).toUpperCase().padStart(4, "0");
+}
+function createToken(lexer, kind, start, end, value) {
+  const line = lexer.line;
+  const col = 1 + start - lexer.lineStart;
+  return new Token(kind, start, end, line, col, value);
+}
+function readNextToken(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let position = start;
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    switch (code) {
+      // Ignored ::
+      //   - UnicodeBOM
+      //   - WhiteSpace
+      //   - LineTerminator
+      //   - Comment
+      //   - Comma
+      //
+      // UnicodeBOM :: "Byte Order Mark (U+FEFF)"
+      //
+      // WhiteSpace ::
+      //   - "Horizontal Tab (U+0009)"
+      //   - "Space (U+0020)"
+      //
+      // Comma :: ,
+      case 65279:
+      // <BOM>
+      case 9:
+      // \t
+      case 32:
+      // <space>
+      case 44:
+        ++position;
+        continue;
+      // LineTerminator ::
+      //   - "New Line (U+000A)"
+      //   - "Carriage Return (U+000D)" [lookahead != "New Line (U+000A)"]
+      //   - "Carriage Return (U+000D)" "New Line (U+000A)"
+      case 10:
+        ++position;
+        ++lexer.line;
+        lexer.lineStart = position;
+        continue;
+      case 13:
+        if (body.charCodeAt(position + 1) === 10) {
+          position += 2;
+        } else {
+          ++position;
+        }
+        ++lexer.line;
+        lexer.lineStart = position;
+        continue;
+      // Comment
+      case 35:
+        return readComment(lexer, position);
+      // Token ::
+      //   - Punctuator
+      //   - Name
+      //   - IntValue
+      //   - FloatValue
+      //   - StringValue
+      //
+      // Punctuator :: one of ! $ & ( ) ... : = @ [ ] { | }
+      case 33:
+        return createToken(lexer, TokenKind.BANG, position, position + 1);
+      case 36:
+        return createToken(lexer, TokenKind.DOLLAR, position, position + 1);
+      case 38:
+        return createToken(lexer, TokenKind.AMP, position, position + 1);
+      case 40:
+        return createToken(lexer, TokenKind.PAREN_L, position, position + 1);
+      case 41:
+        return createToken(lexer, TokenKind.PAREN_R, position, position + 1);
+      case 46:
+        if (body.charCodeAt(position + 1) === 46 && body.charCodeAt(position + 2) === 46) {
+          return createToken(lexer, TokenKind.SPREAD, position, position + 3);
+        }
+        break;
+      case 58:
+        return createToken(lexer, TokenKind.COLON, position, position + 1);
+      case 61:
+        return createToken(lexer, TokenKind.EQUALS, position, position + 1);
+      case 64:
+        return createToken(lexer, TokenKind.AT, position, position + 1);
+      case 91:
+        return createToken(lexer, TokenKind.BRACKET_L, position, position + 1);
+      case 93:
+        return createToken(lexer, TokenKind.BRACKET_R, position, position + 1);
+      case 123:
+        return createToken(lexer, TokenKind.BRACE_L, position, position + 1);
+      case 124:
+        return createToken(lexer, TokenKind.PIPE, position, position + 1);
+      case 125:
+        return createToken(lexer, TokenKind.BRACE_R, position, position + 1);
+      // StringValue
+      case 34:
+        if (body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
+          return readBlockString(lexer, position);
+        }
+        return readString(lexer, position);
+    }
+    if (isDigit(code) || code === 45) {
+      return readNumber(lexer, position, code);
+    }
+    if (isNameStart(code)) {
+      return readName(lexer, position);
+    }
+    throw syntaxError(
+      lexer.source,
+      position,
+      code === 39 ? `Unexpected single quote character ('), did you mean to use a double quote (")?` : isUnicodeScalarValue(code) || isSupplementaryCodePoint(body, position) ? `Unexpected character: ${printCodePointAt(lexer, position)}.` : `Invalid character: ${printCodePointAt(lexer, position)}.`
+    );
+  }
+  return createToken(lexer, TokenKind.EOF, bodyLength, bodyLength);
+}
+function readComment(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let position = start + 1;
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    if (code === 10 || code === 13) {
+      break;
+    }
+    if (isUnicodeScalarValue(code)) {
+      ++position;
+    } else if (isSupplementaryCodePoint(body, position)) {
+      position += 2;
+    } else {
+      break;
+    }
+  }
+  return createToken(
+    lexer,
+    TokenKind.COMMENT,
+    start,
+    position,
+    body.slice(start + 1, position)
+  );
+}
+function readNumber(lexer, start, firstCode) {
+  const body = lexer.source.body;
+  let position = start;
+  let code = firstCode;
+  let isFloat = false;
+  if (code === 45) {
+    code = body.charCodeAt(++position);
+  }
+  if (code === 48) {
+    code = body.charCodeAt(++position);
+    if (isDigit(code)) {
+      throw syntaxError(
+        lexer.source,
+        position,
+        `Invalid number, unexpected digit after 0: ${printCodePointAt(
+          lexer,
+          position
+        )}.`
+      );
+    }
+  } else {
+    position = readDigits(lexer, position, code);
+    code = body.charCodeAt(position);
+  }
+  if (code === 46) {
+    isFloat = true;
+    code = body.charCodeAt(++position);
+    position = readDigits(lexer, position, code);
+    code = body.charCodeAt(position);
+  }
+  if (code === 69 || code === 101) {
+    isFloat = true;
+    code = body.charCodeAt(++position);
+    if (code === 43 || code === 45) {
+      code = body.charCodeAt(++position);
+    }
+    position = readDigits(lexer, position, code);
+    code = body.charCodeAt(position);
+  }
+  if (code === 46 || isNameStart(code)) {
+    throw syntaxError(
+      lexer.source,
+      position,
+      `Invalid number, expected digit but got: ${printCodePointAt(
+        lexer,
+        position
+      )}.`
+    );
+  }
+  return createToken(
+    lexer,
+    isFloat ? TokenKind.FLOAT : TokenKind.INT,
+    start,
+    position,
+    body.slice(start, position)
+  );
+}
+function readDigits(lexer, start, firstCode) {
+  if (!isDigit(firstCode)) {
+    throw syntaxError(
+      lexer.source,
+      start,
+      `Invalid number, expected digit but got: ${printCodePointAt(
+        lexer,
+        start
+      )}.`
+    );
+  }
+  const body = lexer.source.body;
+  let position = start + 1;
+  while (isDigit(body.charCodeAt(position))) {
+    ++position;
+  }
+  return position;
+}
+function readString(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let position = start + 1;
+  let chunkStart = position;
+  let value = "";
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    if (code === 34) {
+      value += body.slice(chunkStart, position);
+      return createToken(lexer, TokenKind.STRING, start, position + 1, value);
+    }
+    if (code === 92) {
+      value += body.slice(chunkStart, position);
+      const escape = body.charCodeAt(position + 1) === 117 ? body.charCodeAt(position + 2) === 123 ? readEscapedUnicodeVariableWidth(lexer, position) : readEscapedUnicodeFixedWidth(lexer, position) : readEscapedCharacter(lexer, position);
+      value += escape.value;
+      position += escape.size;
+      chunkStart = position;
+      continue;
+    }
+    if (code === 10 || code === 13) {
+      break;
+    }
+    if (isUnicodeScalarValue(code)) {
+      ++position;
+    } else if (isSupplementaryCodePoint(body, position)) {
+      position += 2;
+    } else {
+      throw syntaxError(
+        lexer.source,
+        position,
+        `Invalid character within String: ${printCodePointAt(
+          lexer,
+          position
+        )}.`
+      );
+    }
+  }
+  throw syntaxError(lexer.source, position, "Unterminated string.");
+}
+function readEscapedUnicodeVariableWidth(lexer, position) {
+  const body = lexer.source.body;
+  let point = 0;
+  let size = 3;
+  while (size < 12) {
+    const code = body.charCodeAt(position + size++);
+    if (code === 125) {
+      if (size < 5 || !isUnicodeScalarValue(point)) {
+        break;
+      }
+      return {
+        value: String.fromCodePoint(point),
+        size
+      };
+    }
+    point = point << 4 | readHexDigit(code);
+    if (point < 0) {
+      break;
+    }
+  }
+  throw syntaxError(
+    lexer.source,
+    position,
+    `Invalid Unicode escape sequence: "${body.slice(
+      position,
+      position + size
+    )}".`
+  );
+}
+function readEscapedUnicodeFixedWidth(lexer, position) {
+  const body = lexer.source.body;
+  const code = read16BitHexCode(body, position + 2);
+  if (isUnicodeScalarValue(code)) {
+    return {
+      value: String.fromCodePoint(code),
+      size: 6
+    };
+  }
+  if (isLeadingSurrogate(code)) {
+    if (body.charCodeAt(position + 6) === 92 && body.charCodeAt(position + 7) === 117) {
+      const trailingCode = read16BitHexCode(body, position + 8);
+      if (isTrailingSurrogate(trailingCode)) {
+        return {
+          value: String.fromCodePoint(code, trailingCode),
+          size: 12
+        };
+      }
+    }
+  }
+  throw syntaxError(
+    lexer.source,
+    position,
+    `Invalid Unicode escape sequence: "${body.slice(position, position + 6)}".`
+  );
+}
+function read16BitHexCode(body, position) {
+  return readHexDigit(body.charCodeAt(position)) << 12 | readHexDigit(body.charCodeAt(position + 1)) << 8 | readHexDigit(body.charCodeAt(position + 2)) << 4 | readHexDigit(body.charCodeAt(position + 3));
+}
+function readHexDigit(code) {
+  return code >= 48 && code <= 57 ? code - 48 : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
+}
+function readEscapedCharacter(lexer, position) {
+  const body = lexer.source.body;
+  const code = body.charCodeAt(position + 1);
+  switch (code) {
+    case 34:
+      return {
+        value: '"',
+        size: 2
+      };
+    case 92:
+      return {
+        value: "\\",
+        size: 2
+      };
+    case 47:
+      return {
+        value: "/",
+        size: 2
+      };
+    case 98:
+      return {
+        value: "\b",
+        size: 2
+      };
+    case 102:
+      return {
+        value: "\f",
+        size: 2
+      };
+    case 110:
+      return {
+        value: "\n",
+        size: 2
+      };
+    case 114:
+      return {
+        value: "\r",
+        size: 2
+      };
+    case 116:
+      return {
+        value: "	",
+        size: 2
+      };
+  }
+  throw syntaxError(
+    lexer.source,
+    position,
+    `Invalid character escape sequence: "${body.slice(
+      position,
+      position + 2
+    )}".`
+  );
+}
+function readBlockString(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let lineStart = lexer.lineStart;
+  let position = start + 3;
+  let chunkStart = position;
+  let currentLine = "";
+  const blockLines = [];
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    if (code === 34 && body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34) {
+      currentLine += body.slice(chunkStart, position);
+      blockLines.push(currentLine);
+      const token = createToken(
+        lexer,
+        TokenKind.BLOCK_STRING,
+        start,
+        position + 3,
+        // Return a string of the lines joined with U+000A.
+        dedentBlockStringLines(blockLines).join("\n")
+      );
+      lexer.line += blockLines.length - 1;
+      lexer.lineStart = lineStart;
+      return token;
+    }
+    if (code === 92 && body.charCodeAt(position + 1) === 34 && body.charCodeAt(position + 2) === 34 && body.charCodeAt(position + 3) === 34) {
+      currentLine += body.slice(chunkStart, position);
+      chunkStart = position + 1;
+      position += 4;
+      continue;
+    }
+    if (code === 10 || code === 13) {
+      currentLine += body.slice(chunkStart, position);
+      blockLines.push(currentLine);
+      if (code === 13 && body.charCodeAt(position + 1) === 10) {
+        position += 2;
+      } else {
+        ++position;
+      }
+      currentLine = "";
+      chunkStart = position;
+      lineStart = position;
+      continue;
+    }
+    if (isUnicodeScalarValue(code)) {
+      ++position;
+    } else if (isSupplementaryCodePoint(body, position)) {
+      position += 2;
+    } else {
+      throw syntaxError(
+        lexer.source,
+        position,
+        `Invalid character within String: ${printCodePointAt(
+          lexer,
+          position
+        )}.`
+      );
+    }
+  }
+  throw syntaxError(lexer.source, position, "Unterminated string.");
+}
+function readName(lexer, start) {
+  const body = lexer.source.body;
+  const bodyLength = body.length;
+  let position = start + 1;
+  while (position < bodyLength) {
+    const code = body.charCodeAt(position);
+    if (isNameContinue(code)) {
+      ++position;
+    } else {
+      break;
+    }
+  }
+  return createToken(
+    lexer,
+    TokenKind.NAME,
+    start,
+    position,
+    body.slice(start, position)
+  );
+}
+const MAX_ARRAY_LENGTH = 10;
+const MAX_RECURSIVE_DEPTH = 2;
+function inspect(value) {
+  return formatValue$1(value, []);
+}
+function formatValue$1(value, seenValues) {
+  switch (typeof value) {
+    case "string":
+      return JSON.stringify(value);
+    case "function":
+      return value.name ? `[function ${value.name}]` : "[function]";
+    case "object":
+      return formatObjectValue(value, seenValues);
+    default:
+      return String(value);
+  }
+}
+function formatObjectValue(value, previouslySeenValues) {
+  if (value === null) {
+    return "null";
+  }
+  if (previouslySeenValues.includes(value)) {
+    return "[Circular]";
+  }
+  const seenValues = [...previouslySeenValues, value];
+  if (isJSONable(value)) {
+    const jsonValue = value.toJSON();
+    if (jsonValue !== value) {
+      return typeof jsonValue === "string" ? jsonValue : formatValue$1(jsonValue, seenValues);
+    }
+  } else if (Array.isArray(value)) {
+    return formatArray(value, seenValues);
+  }
+  return formatObject(value, seenValues);
+}
+function isJSONable(value) {
+  return typeof value.toJSON === "function";
+}
+function formatObject(object, seenValues) {
+  const entries = Object.entries(object);
+  if (entries.length === 0) {
+    return "{}";
+  }
+  if (seenValues.length > MAX_RECURSIVE_DEPTH) {
+    return "[" + getObjectTag(object) + "]";
+  }
+  const properties = entries.map(
+    ([key, value]) => key + ": " + formatValue$1(value, seenValues)
+  );
+  return "{ " + properties.join(", ") + " }";
+}
+function formatArray(array, seenValues) {
+  if (array.length === 0) {
+    return "[]";
+  }
+  if (seenValues.length > MAX_RECURSIVE_DEPTH) {
+    return "[Array]";
+  }
+  const len = Math.min(MAX_ARRAY_LENGTH, array.length);
+  const remaining = array.length - len;
+  const items = [];
+  for (let i = 0; i < len; ++i) {
+    items.push(formatValue$1(array[i], seenValues));
+  }
+  if (remaining === 1) {
+    items.push("... 1 more item");
+  } else if (remaining > 1) {
+    items.push(`... ${remaining} more items`);
+  }
+  return "[" + items.join(", ") + "]";
+}
+function getObjectTag(object) {
+  const tag = Object.prototype.toString.call(object).replace(/^\[object /, "").replace(/]$/, "");
+  if (tag === "Object" && typeof object.constructor === "function") {
+    const name = object.constructor.name;
+    if (typeof name === "string" && name !== "") {
+      return name;
+    }
+  }
+  return tag;
+}
+const isProduction = globalThis.process && // eslint-disable-next-line no-undef
+process.env.NODE_ENV === "production";
+const instanceOf = (
+  /* c8 ignore next 6 */
+  // FIXME: https://github.com/graphql/graphql-js/issues/2317
+  isProduction ? function instanceOf2(value, constructor) {
+    return value instanceof constructor;
+  } : function instanceOf3(value, constructor) {
+    if (value instanceof constructor) {
+      return true;
+    }
+    if (typeof value === "object" && value !== null) {
+      var _value$constructor;
+      const className = constructor.prototype[Symbol.toStringTag];
+      const valueClassName = (
+        // We still need to support constructor's name to detect conflicts with older versions of this library.
+        Symbol.toStringTag in value ? value[Symbol.toStringTag] : (_value$constructor = value.constructor) === null || _value$constructor === void 0 ? void 0 : _value$constructor.name
+      );
+      if (className === valueClassName) {
+        const stringifiedValue = inspect(value);
+        throw new Error(`Cannot use ${className} "${stringifiedValue}" from another module or realm.
+
+Ensure that there is only one instance of "graphql" in the node_modules
+directory. If different versions of "graphql" are the dependencies of other
+relied on modules, use "resolutions" to ensure only one version is installed.
+
+https://yarnpkg.com/en/docs/selective-version-resolutions
+
+Duplicate "graphql" modules cannot be used at the same time since different
+versions may have different capabilities and behavior. The data from one
+version used in the function from another could produce confusing and
+spurious results.`);
+      }
+    }
+    return false;
+  }
+);
+class Source {
+  constructor(body, name = "GraphQL request", locationOffset = {
+    line: 1,
+    column: 1
+  }) {
+    typeof body === "string" || devAssert(false, `Body must be a string. Received: ${inspect(body)}.`);
+    this.body = body;
+    this.name = name;
+    this.locationOffset = locationOffset;
+    this.locationOffset.line > 0 || devAssert(
+      false,
+      "line in locationOffset is 1-indexed and must be positive."
+    );
+    this.locationOffset.column > 0 || devAssert(
+      false,
+      "column in locationOffset is 1-indexed and must be positive."
+    );
+  }
+  get [Symbol.toStringTag]() {
+    return "Source";
+  }
+}
+function isSource(source) {
+  return instanceOf(source, Source);
+}
+function parse(source, options2) {
+  const parser = new Parser(source, options2);
+  const document2 = parser.parseDocument();
+  Object.defineProperty(document2, "tokenCount", {
+    enumerable: false,
+    value: parser.tokenCount
+  });
+  return document2;
+}
+class Parser {
+  constructor(source, options2 = {}) {
+    const { lexer, ..._options } = options2;
+    if (lexer) {
+      this._lexer = lexer;
+    } else {
+      const sourceObj = isSource(source) ? source : new Source(source);
+      this._lexer = new Lexer(sourceObj);
+    }
+    this._options = _options;
+    this._tokenCounter = 0;
+  }
+  get tokenCount() {
+    return this._tokenCounter;
+  }
+  /**
+   * Converts a name lex token into a name parse node.
+   */
+  parseName() {
+    const token = this.expectToken(TokenKind.NAME);
+    return this.node(token, {
+      kind: Kind.NAME,
+      value: token.value
+    });
+  }
+  // Implements the parsing rules in the Document section.
+  /**
+   * Document : Definition+
+   */
+  parseDocument() {
+    return this.node(this._lexer.token, {
+      kind: Kind.DOCUMENT,
+      definitions: this.many(
+        TokenKind.SOF,
+        this.parseDefinition,
+        TokenKind.EOF
+      )
+    });
+  }
+  /**
+   * Definition :
+   *   - ExecutableDefinition
+   *   - TypeSystemDefinition
+   *   - TypeSystemExtension
+   *
+   * ExecutableDefinition :
+   *   - OperationDefinition
+   *   - FragmentDefinition
+   *
+   * TypeSystemDefinition :
+   *   - SchemaDefinition
+   *   - TypeDefinition
+   *   - DirectiveDefinition
+   *
+   * TypeDefinition :
+   *   - ScalarTypeDefinition
+   *   - ObjectTypeDefinition
+   *   - InterfaceTypeDefinition
+   *   - UnionTypeDefinition
+   *   - EnumTypeDefinition
+   *   - InputObjectTypeDefinition
+   */
+  parseDefinition() {
+    if (this.peek(TokenKind.BRACE_L)) {
+      return this.parseOperationDefinition();
+    }
+    const hasDescription = this.peekDescription();
+    const keywordToken = hasDescription ? this._lexer.lookahead() : this._lexer.token;
+    if (hasDescription && keywordToken.kind === TokenKind.BRACE_L) {
+      throw syntaxError(
+        this._lexer.source,
+        this._lexer.token.start,
+        "Unexpected description, descriptions are not supported on shorthand queries."
+      );
+    }
+    if (keywordToken.kind === TokenKind.NAME) {
+      switch (keywordToken.value) {
+        case "schema":
+          return this.parseSchemaDefinition();
+        case "scalar":
+          return this.parseScalarTypeDefinition();
+        case "type":
+          return this.parseObjectTypeDefinition();
+        case "interface":
+          return this.parseInterfaceTypeDefinition();
+        case "union":
+          return this.parseUnionTypeDefinition();
+        case "enum":
+          return this.parseEnumTypeDefinition();
+        case "input":
+          return this.parseInputObjectTypeDefinition();
+        case "directive":
+          return this.parseDirectiveDefinition();
+      }
+      switch (keywordToken.value) {
+        case "query":
+        case "mutation":
+        case "subscription":
+          return this.parseOperationDefinition();
+        case "fragment":
+          return this.parseFragmentDefinition();
+      }
+      if (hasDescription) {
+        throw syntaxError(
+          this._lexer.source,
+          this._lexer.token.start,
+          "Unexpected description, only GraphQL definitions support descriptions."
+        );
+      }
+      switch (keywordToken.value) {
+        case "extend":
+          return this.parseTypeSystemExtension();
+      }
+    }
+    throw this.unexpected(keywordToken);
+  }
+  // Implements the parsing rules in the Operations section.
+  /**
+   * OperationDefinition :
+   *  - SelectionSet
+   *  - OperationType Name? VariableDefinitions? Directives? SelectionSet
+   */
+  parseOperationDefinition() {
+    const start = this._lexer.token;
+    if (this.peek(TokenKind.BRACE_L)) {
+      return this.node(start, {
+        kind: Kind.OPERATION_DEFINITION,
+        operation: OperationTypeNode.QUERY,
+        description: void 0,
+        name: void 0,
+        variableDefinitions: [],
+        directives: [],
+        selectionSet: this.parseSelectionSet()
+      });
+    }
+    const description = this.parseDescription();
+    const operation = this.parseOperationType();
+    let name;
+    if (this.peek(TokenKind.NAME)) {
+      name = this.parseName();
+    }
+    return this.node(start, {
+      kind: Kind.OPERATION_DEFINITION,
+      operation,
+      description,
+      name,
+      variableDefinitions: this.parseVariableDefinitions(),
+      directives: this.parseDirectives(false),
+      selectionSet: this.parseSelectionSet()
+    });
+  }
+  /**
+   * OperationType : one of query mutation subscription
+   */
+  parseOperationType() {
+    const operationToken = this.expectToken(TokenKind.NAME);
+    switch (operationToken.value) {
+      case "query":
+        return OperationTypeNode.QUERY;
+      case "mutation":
+        return OperationTypeNode.MUTATION;
+      case "subscription":
+        return OperationTypeNode.SUBSCRIPTION;
+    }
+    throw this.unexpected(operationToken);
+  }
+  /**
+   * VariableDefinitions : ( VariableDefinition+ )
+   */
+  parseVariableDefinitions() {
+    return this.optionalMany(
+      TokenKind.PAREN_L,
+      this.parseVariableDefinition,
+      TokenKind.PAREN_R
+    );
+  }
+  /**
+   * VariableDefinition : Variable : Type DefaultValue? Directives[Const]?
+   */
+  parseVariableDefinition() {
+    return this.node(this._lexer.token, {
+      kind: Kind.VARIABLE_DEFINITION,
+      description: this.parseDescription(),
+      variable: this.parseVariable(),
+      type: (this.expectToken(TokenKind.COLON), this.parseTypeReference()),
+      defaultValue: this.expectOptionalToken(TokenKind.EQUALS) ? this.parseConstValueLiteral() : void 0,
+      directives: this.parseConstDirectives()
+    });
+  }
+  /**
+   * Variable : $ Name
+   */
+  parseVariable() {
+    const start = this._lexer.token;
+    this.expectToken(TokenKind.DOLLAR);
+    return this.node(start, {
+      kind: Kind.VARIABLE,
+      name: this.parseName()
+    });
+  }
+  /**
+   * ```
+   * SelectionSet : { Selection+ }
+   * ```
+   */
+  parseSelectionSet() {
+    return this.node(this._lexer.token, {
+      kind: Kind.SELECTION_SET,
+      selections: this.many(
+        TokenKind.BRACE_L,
+        this.parseSelection,
+        TokenKind.BRACE_R
+      )
+    });
+  }
+  /**
+   * Selection :
+   *   - Field
+   *   - FragmentSpread
+   *   - InlineFragment
+   */
+  parseSelection() {
+    return this.peek(TokenKind.SPREAD) ? this.parseFragment() : this.parseField();
+  }
+  /**
+   * Field : Alias? Name Arguments? Directives? SelectionSet?
+   *
+   * Alias : Name :
+   */
+  parseField() {
+    const start = this._lexer.token;
+    const nameOrAlias = this.parseName();
+    let alias;
+    let name;
+    if (this.expectOptionalToken(TokenKind.COLON)) {
+      alias = nameOrAlias;
+      name = this.parseName();
+    } else {
+      name = nameOrAlias;
+    }
+    return this.node(start, {
+      kind: Kind.FIELD,
+      alias,
+      name,
+      arguments: this.parseArguments(false),
+      directives: this.parseDirectives(false),
+      selectionSet: this.peek(TokenKind.BRACE_L) ? this.parseSelectionSet() : void 0
+    });
+  }
+  /**
+   * Arguments[Const] : ( Argument[?Const]+ )
+   */
+  parseArguments(isConst) {
+    const item = isConst ? this.parseConstArgument : this.parseArgument;
+    return this.optionalMany(TokenKind.PAREN_L, item, TokenKind.PAREN_R);
+  }
+  /**
+   * Argument[Const] : Name : Value[?Const]
+   */
+  parseArgument(isConst = false) {
+    const start = this._lexer.token;
+    const name = this.parseName();
+    this.expectToken(TokenKind.COLON);
+    return this.node(start, {
+      kind: Kind.ARGUMENT,
+      name,
+      value: this.parseValueLiteral(isConst)
+    });
+  }
+  parseConstArgument() {
+    return this.parseArgument(true);
+  }
+  // Implements the parsing rules in the Fragments section.
+  /**
+   * Corresponds to both FragmentSpread and InlineFragment in the spec.
+   *
+   * FragmentSpread : ... FragmentName Directives?
+   *
+   * InlineFragment : ... TypeCondition? Directives? SelectionSet
+   */
+  parseFragment() {
+    const start = this._lexer.token;
+    this.expectToken(TokenKind.SPREAD);
+    const hasTypeCondition = this.expectOptionalKeyword("on");
+    if (!hasTypeCondition && this.peek(TokenKind.NAME)) {
+      return this.node(start, {
+        kind: Kind.FRAGMENT_SPREAD,
+        name: this.parseFragmentName(),
+        directives: this.parseDirectives(false)
+      });
+    }
+    return this.node(start, {
+      kind: Kind.INLINE_FRAGMENT,
+      typeCondition: hasTypeCondition ? this.parseNamedType() : void 0,
+      directives: this.parseDirectives(false),
+      selectionSet: this.parseSelectionSet()
+    });
+  }
+  /**
+   * FragmentDefinition :
+   *   - fragment FragmentName on TypeCondition Directives? SelectionSet
+   *
+   * TypeCondition : NamedType
+   */
+  parseFragmentDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("fragment");
+    if (this._options.allowLegacyFragmentVariables === true) {
+      return this.node(start, {
+        kind: Kind.FRAGMENT_DEFINITION,
+        description,
+        name: this.parseFragmentName(),
+        variableDefinitions: this.parseVariableDefinitions(),
+        typeCondition: (this.expectKeyword("on"), this.parseNamedType()),
+        directives: this.parseDirectives(false),
+        selectionSet: this.parseSelectionSet()
+      });
+    }
+    return this.node(start, {
+      kind: Kind.FRAGMENT_DEFINITION,
+      description,
+      name: this.parseFragmentName(),
+      typeCondition: (this.expectKeyword("on"), this.parseNamedType()),
+      directives: this.parseDirectives(false),
+      selectionSet: this.parseSelectionSet()
+    });
+  }
+  /**
+   * FragmentName : Name but not `on`
+   */
+  parseFragmentName() {
+    if (this._lexer.token.value === "on") {
+      throw this.unexpected();
+    }
+    return this.parseName();
+  }
+  // Implements the parsing rules in the Values section.
+  /**
+   * Value[Const] :
+   *   - [~Const] Variable
+   *   - IntValue
+   *   - FloatValue
+   *   - StringValue
+   *   - BooleanValue
+   *   - NullValue
+   *   - EnumValue
+   *   - ListValue[?Const]
+   *   - ObjectValue[?Const]
+   *
+   * BooleanValue : one of `true` `false`
+   *
+   * NullValue : `null`
+   *
+   * EnumValue : Name but not `true`, `false` or `null`
+   */
+  parseValueLiteral(isConst) {
+    const token = this._lexer.token;
+    switch (token.kind) {
+      case TokenKind.BRACKET_L:
+        return this.parseList(isConst);
+      case TokenKind.BRACE_L:
+        return this.parseObject(isConst);
+      case TokenKind.INT:
+        this.advanceLexer();
+        return this.node(token, {
+          kind: Kind.INT,
+          value: token.value
+        });
+      case TokenKind.FLOAT:
+        this.advanceLexer();
+        return this.node(token, {
+          kind: Kind.FLOAT,
+          value: token.value
+        });
+      case TokenKind.STRING:
+      case TokenKind.BLOCK_STRING:
+        return this.parseStringLiteral();
+      case TokenKind.NAME:
+        this.advanceLexer();
+        switch (token.value) {
+          case "true":
+            return this.node(token, {
+              kind: Kind.BOOLEAN,
+              value: true
+            });
+          case "false":
+            return this.node(token, {
+              kind: Kind.BOOLEAN,
+              value: false
+            });
+          case "null":
+            return this.node(token, {
+              kind: Kind.NULL
+            });
+          default:
+            return this.node(token, {
+              kind: Kind.ENUM,
+              value: token.value
+            });
+        }
+      case TokenKind.DOLLAR:
+        if (isConst) {
+          this.expectToken(TokenKind.DOLLAR);
+          if (this._lexer.token.kind === TokenKind.NAME) {
+            const varName = this._lexer.token.value;
+            throw syntaxError(
+              this._lexer.source,
+              token.start,
+              `Unexpected variable "$${varName}" in constant value.`
+            );
+          } else {
+            throw this.unexpected(token);
+          }
+        }
+        return this.parseVariable();
+      default:
+        throw this.unexpected();
+    }
+  }
+  parseConstValueLiteral() {
+    return this.parseValueLiteral(true);
+  }
+  parseStringLiteral() {
+    const token = this._lexer.token;
+    this.advanceLexer();
+    return this.node(token, {
+      kind: Kind.STRING,
+      value: token.value,
+      block: token.kind === TokenKind.BLOCK_STRING
+    });
+  }
+  /**
+   * ListValue[Const] :
+   *   - [ ]
+   *   - [ Value[?Const]+ ]
+   */
+  parseList(isConst) {
+    const item = () => this.parseValueLiteral(isConst);
+    return this.node(this._lexer.token, {
+      kind: Kind.LIST,
+      values: this.any(TokenKind.BRACKET_L, item, TokenKind.BRACKET_R)
+    });
+  }
+  /**
+   * ```
+   * ObjectValue[Const] :
+   *   - { }
+   *   - { ObjectField[?Const]+ }
+   * ```
+   */
+  parseObject(isConst) {
+    const item = () => this.parseObjectField(isConst);
+    return this.node(this._lexer.token, {
+      kind: Kind.OBJECT,
+      fields: this.any(TokenKind.BRACE_L, item, TokenKind.BRACE_R)
+    });
+  }
+  /**
+   * ObjectField[Const] : Name : Value[?Const]
+   */
+  parseObjectField(isConst) {
+    const start = this._lexer.token;
+    const name = this.parseName();
+    this.expectToken(TokenKind.COLON);
+    return this.node(start, {
+      kind: Kind.OBJECT_FIELD,
+      name,
+      value: this.parseValueLiteral(isConst)
+    });
+  }
+  // Implements the parsing rules in the Directives section.
+  /**
+   * Directives[Const] : Directive[?Const]+
+   */
+  parseDirectives(isConst) {
+    const directives = [];
+    while (this.peek(TokenKind.AT)) {
+      directives.push(this.parseDirective(isConst));
+    }
+    return directives;
+  }
+  parseConstDirectives() {
+    return this.parseDirectives(true);
+  }
+  /**
+   * ```
+   * Directive[Const] : @ Name Arguments[?Const]?
+   * ```
+   */
+  parseDirective(isConst) {
+    const start = this._lexer.token;
+    this.expectToken(TokenKind.AT);
+    return this.node(start, {
+      kind: Kind.DIRECTIVE,
+      name: this.parseName(),
+      arguments: this.parseArguments(isConst)
+    });
+  }
+  // Implements the parsing rules in the Types section.
+  /**
+   * Type :
+   *   - NamedType
+   *   - ListType
+   *   - NonNullType
+   */
+  parseTypeReference() {
+    const start = this._lexer.token;
+    let type2;
+    if (this.expectOptionalToken(TokenKind.BRACKET_L)) {
+      const innerType = this.parseTypeReference();
+      this.expectToken(TokenKind.BRACKET_R);
+      type2 = this.node(start, {
+        kind: Kind.LIST_TYPE,
+        type: innerType
+      });
+    } else {
+      type2 = this.parseNamedType();
+    }
+    if (this.expectOptionalToken(TokenKind.BANG)) {
+      return this.node(start, {
+        kind: Kind.NON_NULL_TYPE,
+        type: type2
+      });
+    }
+    return type2;
+  }
+  /**
+   * NamedType : Name
+   */
+  parseNamedType() {
+    return this.node(this._lexer.token, {
+      kind: Kind.NAMED_TYPE,
+      name: this.parseName()
+    });
+  }
+  // Implements the parsing rules in the Type Definition section.
+  peekDescription() {
+    return this.peek(TokenKind.STRING) || this.peek(TokenKind.BLOCK_STRING);
+  }
+  /**
+   * Description : StringValue
+   */
+  parseDescription() {
+    if (this.peekDescription()) {
+      return this.parseStringLiteral();
+    }
+  }
+  /**
+   * ```
+   * SchemaDefinition : Description? schema Directives[Const]? { OperationTypeDefinition+ }
+   * ```
+   */
+  parseSchemaDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("schema");
+    const directives = this.parseConstDirectives();
+    const operationTypes = this.many(
+      TokenKind.BRACE_L,
+      this.parseOperationTypeDefinition,
+      TokenKind.BRACE_R
+    );
+    return this.node(start, {
+      kind: Kind.SCHEMA_DEFINITION,
+      description,
+      directives,
+      operationTypes
+    });
+  }
+  /**
+   * OperationTypeDefinition : OperationType : NamedType
+   */
+  parseOperationTypeDefinition() {
+    const start = this._lexer.token;
+    const operation = this.parseOperationType();
+    this.expectToken(TokenKind.COLON);
+    const type2 = this.parseNamedType();
+    return this.node(start, {
+      kind: Kind.OPERATION_TYPE_DEFINITION,
+      operation,
+      type: type2
+    });
+  }
+  /**
+   * ScalarTypeDefinition : Description? scalar Name Directives[Const]?
+   */
+  parseScalarTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("scalar");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    return this.node(start, {
+      kind: Kind.SCALAR_TYPE_DEFINITION,
+      description,
+      name,
+      directives
+    });
+  }
+  /**
+   * ObjectTypeDefinition :
+   *   Description?
+   *   type Name ImplementsInterfaces? Directives[Const]? FieldsDefinition?
+   */
+  parseObjectTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("type");
+    const name = this.parseName();
+    const interfaces = this.parseImplementsInterfaces();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseFieldsDefinition();
+    return this.node(start, {
+      kind: Kind.OBJECT_TYPE_DEFINITION,
+      description,
+      name,
+      interfaces,
+      directives,
+      fields
+    });
+  }
+  /**
+   * ImplementsInterfaces :
+   *   - implements `&`? NamedType
+   *   - ImplementsInterfaces & NamedType
+   */
+  parseImplementsInterfaces() {
+    return this.expectOptionalKeyword("implements") ? this.delimitedMany(TokenKind.AMP, this.parseNamedType) : [];
+  }
+  /**
+   * ```
+   * FieldsDefinition : { FieldDefinition+ }
+   * ```
+   */
+  parseFieldsDefinition() {
+    return this.optionalMany(
+      TokenKind.BRACE_L,
+      this.parseFieldDefinition,
+      TokenKind.BRACE_R
+    );
+  }
+  /**
+   * FieldDefinition :
+   *   - Description? Name ArgumentsDefinition? : Type Directives[Const]?
+   */
+  parseFieldDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    const name = this.parseName();
+    const args = this.parseArgumentDefs();
+    this.expectToken(TokenKind.COLON);
+    const type2 = this.parseTypeReference();
+    const directives = this.parseConstDirectives();
+    return this.node(start, {
+      kind: Kind.FIELD_DEFINITION,
+      description,
+      name,
+      arguments: args,
+      type: type2,
+      directives
+    });
+  }
+  /**
+   * ArgumentsDefinition : ( InputValueDefinition+ )
+   */
+  parseArgumentDefs() {
+    return this.optionalMany(
+      TokenKind.PAREN_L,
+      this.parseInputValueDef,
+      TokenKind.PAREN_R
+    );
+  }
+  /**
+   * InputValueDefinition :
+   *   - Description? Name : Type DefaultValue? Directives[Const]?
+   */
+  parseInputValueDef() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    const name = this.parseName();
+    this.expectToken(TokenKind.COLON);
+    const type2 = this.parseTypeReference();
+    let defaultValue;
+    if (this.expectOptionalToken(TokenKind.EQUALS)) {
+      defaultValue = this.parseConstValueLiteral();
+    }
+    const directives = this.parseConstDirectives();
+    return this.node(start, {
+      kind: Kind.INPUT_VALUE_DEFINITION,
+      description,
+      name,
+      type: type2,
+      defaultValue,
+      directives
+    });
+  }
+  /**
+   * InterfaceTypeDefinition :
+   *   - Description? interface Name Directives[Const]? FieldsDefinition?
+   */
+  parseInterfaceTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("interface");
+    const name = this.parseName();
+    const interfaces = this.parseImplementsInterfaces();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseFieldsDefinition();
+    return this.node(start, {
+      kind: Kind.INTERFACE_TYPE_DEFINITION,
+      description,
+      name,
+      interfaces,
+      directives,
+      fields
+    });
+  }
+  /**
+   * UnionTypeDefinition :
+   *   - Description? union Name Directives[Const]? UnionMemberTypes?
+   */
+  parseUnionTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("union");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const types = this.parseUnionMemberTypes();
+    return this.node(start, {
+      kind: Kind.UNION_TYPE_DEFINITION,
+      description,
+      name,
+      directives,
+      types
+    });
+  }
+  /**
+   * UnionMemberTypes :
+   *   - = `|`? NamedType
+   *   - UnionMemberTypes | NamedType
+   */
+  parseUnionMemberTypes() {
+    return this.expectOptionalToken(TokenKind.EQUALS) ? this.delimitedMany(TokenKind.PIPE, this.parseNamedType) : [];
+  }
+  /**
+   * EnumTypeDefinition :
+   *   - Description? enum Name Directives[Const]? EnumValuesDefinition?
+   */
+  parseEnumTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("enum");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const values = this.parseEnumValuesDefinition();
+    return this.node(start, {
+      kind: Kind.ENUM_TYPE_DEFINITION,
+      description,
+      name,
+      directives,
+      values
+    });
+  }
+  /**
+   * ```
+   * EnumValuesDefinition : { EnumValueDefinition+ }
+   * ```
+   */
+  parseEnumValuesDefinition() {
+    return this.optionalMany(
+      TokenKind.BRACE_L,
+      this.parseEnumValueDefinition,
+      TokenKind.BRACE_R
+    );
+  }
+  /**
+   * EnumValueDefinition : Description? EnumValue Directives[Const]?
+   */
+  parseEnumValueDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    const name = this.parseEnumValueName();
+    const directives = this.parseConstDirectives();
+    return this.node(start, {
+      kind: Kind.ENUM_VALUE_DEFINITION,
+      description,
+      name,
+      directives
+    });
+  }
+  /**
+   * EnumValue : Name but not `true`, `false` or `null`
+   */
+  parseEnumValueName() {
+    if (this._lexer.token.value === "true" || this._lexer.token.value === "false" || this._lexer.token.value === "null") {
+      throw syntaxError(
+        this._lexer.source,
+        this._lexer.token.start,
+        `${getTokenDesc(
+          this._lexer.token
+        )} is reserved and cannot be used for an enum value.`
+      );
+    }
+    return this.parseName();
+  }
+  /**
+   * InputObjectTypeDefinition :
+   *   - Description? input Name Directives[Const]? InputFieldsDefinition?
+   */
+  parseInputObjectTypeDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("input");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseInputFieldsDefinition();
+    return this.node(start, {
+      kind: Kind.INPUT_OBJECT_TYPE_DEFINITION,
+      description,
+      name,
+      directives,
+      fields
+    });
+  }
+  /**
+   * ```
+   * InputFieldsDefinition : { InputValueDefinition+ }
+   * ```
+   */
+  parseInputFieldsDefinition() {
+    return this.optionalMany(
+      TokenKind.BRACE_L,
+      this.parseInputValueDef,
+      TokenKind.BRACE_R
+    );
+  }
+  /**
+   * TypeSystemExtension :
+   *   - SchemaExtension
+   *   - TypeExtension
+   *
+   * TypeExtension :
+   *   - ScalarTypeExtension
+   *   - ObjectTypeExtension
+   *   - InterfaceTypeExtension
+   *   - UnionTypeExtension
+   *   - EnumTypeExtension
+   *   - InputObjectTypeDefinition
+   */
+  parseTypeSystemExtension() {
+    const keywordToken = this._lexer.lookahead();
+    if (keywordToken.kind === TokenKind.NAME) {
+      switch (keywordToken.value) {
+        case "schema":
+          return this.parseSchemaExtension();
+        case "scalar":
+          return this.parseScalarTypeExtension();
+        case "type":
+          return this.parseObjectTypeExtension();
+        case "interface":
+          return this.parseInterfaceTypeExtension();
+        case "union":
+          return this.parseUnionTypeExtension();
+        case "enum":
+          return this.parseEnumTypeExtension();
+        case "input":
+          return this.parseInputObjectTypeExtension();
+      }
+    }
+    throw this.unexpected(keywordToken);
+  }
+  /**
+   * ```
+   * SchemaExtension :
+   *  - extend schema Directives[Const]? { OperationTypeDefinition+ }
+   *  - extend schema Directives[Const]
+   * ```
+   */
+  parseSchemaExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("schema");
+    const directives = this.parseConstDirectives();
+    const operationTypes = this.optionalMany(
+      TokenKind.BRACE_L,
+      this.parseOperationTypeDefinition,
+      TokenKind.BRACE_R
+    );
+    if (directives.length === 0 && operationTypes.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.SCHEMA_EXTENSION,
+      directives,
+      operationTypes
+    });
+  }
+  /**
+   * ScalarTypeExtension :
+   *   - extend scalar Name Directives[Const]
+   */
+  parseScalarTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("scalar");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    if (directives.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.SCALAR_TYPE_EXTENSION,
+      name,
+      directives
+    });
+  }
+  /**
+   * ObjectTypeExtension :
+   *  - extend type Name ImplementsInterfaces? Directives[Const]? FieldsDefinition
+   *  - extend type Name ImplementsInterfaces? Directives[Const]
+   *  - extend type Name ImplementsInterfaces
+   */
+  parseObjectTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("type");
+    const name = this.parseName();
+    const interfaces = this.parseImplementsInterfaces();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseFieldsDefinition();
+    if (interfaces.length === 0 && directives.length === 0 && fields.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.OBJECT_TYPE_EXTENSION,
+      name,
+      interfaces,
+      directives,
+      fields
+    });
+  }
+  /**
+   * InterfaceTypeExtension :
+   *  - extend interface Name ImplementsInterfaces? Directives[Const]? FieldsDefinition
+   *  - extend interface Name ImplementsInterfaces? Directives[Const]
+   *  - extend interface Name ImplementsInterfaces
+   */
+  parseInterfaceTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("interface");
+    const name = this.parseName();
+    const interfaces = this.parseImplementsInterfaces();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseFieldsDefinition();
+    if (interfaces.length === 0 && directives.length === 0 && fields.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.INTERFACE_TYPE_EXTENSION,
+      name,
+      interfaces,
+      directives,
+      fields
+    });
+  }
+  /**
+   * UnionTypeExtension :
+   *   - extend union Name Directives[Const]? UnionMemberTypes
+   *   - extend union Name Directives[Const]
+   */
+  parseUnionTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("union");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const types = this.parseUnionMemberTypes();
+    if (directives.length === 0 && types.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.UNION_TYPE_EXTENSION,
+      name,
+      directives,
+      types
+    });
+  }
+  /**
+   * EnumTypeExtension :
+   *   - extend enum Name Directives[Const]? EnumValuesDefinition
+   *   - extend enum Name Directives[Const]
+   */
+  parseEnumTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("enum");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const values = this.parseEnumValuesDefinition();
+    if (directives.length === 0 && values.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.ENUM_TYPE_EXTENSION,
+      name,
+      directives,
+      values
+    });
+  }
+  /**
+   * InputObjectTypeExtension :
+   *   - extend input Name Directives[Const]? InputFieldsDefinition
+   *   - extend input Name Directives[Const]
+   */
+  parseInputObjectTypeExtension() {
+    const start = this._lexer.token;
+    this.expectKeyword("extend");
+    this.expectKeyword("input");
+    const name = this.parseName();
+    const directives = this.parseConstDirectives();
+    const fields = this.parseInputFieldsDefinition();
+    if (directives.length === 0 && fields.length === 0) {
+      throw this.unexpected();
+    }
+    return this.node(start, {
+      kind: Kind.INPUT_OBJECT_TYPE_EXTENSION,
+      name,
+      directives,
+      fields
+    });
+  }
+  /**
+   * ```
+   * DirectiveDefinition :
+   *   - Description? directive @ Name ArgumentsDefinition? `repeatable`? on DirectiveLocations
+   * ```
+   */
+  parseDirectiveDefinition() {
+    const start = this._lexer.token;
+    const description = this.parseDescription();
+    this.expectKeyword("directive");
+    this.expectToken(TokenKind.AT);
+    const name = this.parseName();
+    const args = this.parseArgumentDefs();
+    const repeatable = this.expectOptionalKeyword("repeatable");
+    this.expectKeyword("on");
+    const locations = this.parseDirectiveLocations();
+    return this.node(start, {
+      kind: Kind.DIRECTIVE_DEFINITION,
+      description,
+      name,
+      arguments: args,
+      repeatable,
+      locations
+    });
+  }
+  /**
+   * DirectiveLocations :
+   *   - `|`? DirectiveLocation
+   *   - DirectiveLocations | DirectiveLocation
+   */
+  parseDirectiveLocations() {
+    return this.delimitedMany(TokenKind.PIPE, this.parseDirectiveLocation);
+  }
+  /*
+   * DirectiveLocation :
+   *   - ExecutableDirectiveLocation
+   *   - TypeSystemDirectiveLocation
+   *
+   * ExecutableDirectiveLocation : one of
+   *   `QUERY`
+   *   `MUTATION`
+   *   `SUBSCRIPTION`
+   *   `FIELD`
+   *   `FRAGMENT_DEFINITION`
+   *   `FRAGMENT_SPREAD`
+   *   `INLINE_FRAGMENT`
+   *
+   * TypeSystemDirectiveLocation : one of
+   *   `SCHEMA`
+   *   `SCALAR`
+   *   `OBJECT`
+   *   `FIELD_DEFINITION`
+   *   `ARGUMENT_DEFINITION`
+   *   `INTERFACE`
+   *   `UNION`
+   *   `ENUM`
+   *   `ENUM_VALUE`
+   *   `INPUT_OBJECT`
+   *   `INPUT_FIELD_DEFINITION`
+   */
+  parseDirectiveLocation() {
+    const start = this._lexer.token;
+    const name = this.parseName();
+    if (Object.prototype.hasOwnProperty.call(DirectiveLocation, name.value)) {
+      return name;
+    }
+    throw this.unexpected(start);
+  }
+  // Schema Coordinates
+  /**
+   * SchemaCoordinate :
+   *   - Name
+   *   - Name . Name
+   *   - Name . Name ( Name : )
+   *   - \@ Name
+   *   - \@ Name ( Name : )
+   */
+  parseSchemaCoordinate() {
+    const start = this._lexer.token;
+    const ofDirective = this.expectOptionalToken(TokenKind.AT);
+    const name = this.parseName();
+    let memberName;
+    if (!ofDirective && this.expectOptionalToken(TokenKind.DOT)) {
+      memberName = this.parseName();
+    }
+    let argumentName;
+    if ((ofDirective || memberName) && this.expectOptionalToken(TokenKind.PAREN_L)) {
+      argumentName = this.parseName();
+      this.expectToken(TokenKind.COLON);
+      this.expectToken(TokenKind.PAREN_R);
+    }
+    if (ofDirective) {
+      if (argumentName) {
+        return this.node(start, {
+          kind: Kind.DIRECTIVE_ARGUMENT_COORDINATE,
+          name,
+          argumentName
+        });
+      }
+      return this.node(start, {
+        kind: Kind.DIRECTIVE_COORDINATE,
+        name
+      });
+    } else if (memberName) {
+      if (argumentName) {
+        return this.node(start, {
+          kind: Kind.ARGUMENT_COORDINATE,
+          name,
+          fieldName: memberName,
+          argumentName
+        });
+      }
+      return this.node(start, {
+        kind: Kind.MEMBER_COORDINATE,
+        name,
+        memberName
+      });
+    }
+    return this.node(start, {
+      kind: Kind.TYPE_COORDINATE,
+      name
+    });
+  }
+  // Core parsing utility functions
+  /**
+   * Returns a node that, if configured to do so, sets a "loc" field as a
+   * location object, used to identify the place in the source that created a
+   * given parsed object.
+   */
+  node(startToken, node2) {
+    if (this._options.noLocation !== true) {
+      node2.loc = new Location(
+        startToken,
+        this._lexer.lastToken,
+        this._lexer.source
+      );
+    }
+    return node2;
+  }
+  /**
+   * Determines if the next token is of a given kind
+   */
+  peek(kind) {
+    return this._lexer.token.kind === kind;
+  }
+  /**
+   * If the next token is of the given kind, return that token after advancing the lexer.
+   * Otherwise, do not change the parser state and throw an error.
+   */
+  expectToken(kind) {
+    const token = this._lexer.token;
+    if (token.kind === kind) {
+      this.advanceLexer();
+      return token;
+    }
+    throw syntaxError(
+      this._lexer.source,
+      token.start,
+      `Expected ${getTokenKindDesc(kind)}, found ${getTokenDesc(token)}.`
+    );
+  }
+  /**
+   * If the next token is of the given kind, return "true" after advancing the lexer.
+   * Otherwise, do not change the parser state and return "false".
+   */
+  expectOptionalToken(kind) {
+    const token = this._lexer.token;
+    if (token.kind === kind) {
+      this.advanceLexer();
+      return true;
+    }
+    return false;
+  }
+  /**
+   * If the next token is a given keyword, advance the lexer.
+   * Otherwise, do not change the parser state and throw an error.
+   */
+  expectKeyword(value) {
+    const token = this._lexer.token;
+    if (token.kind === TokenKind.NAME && token.value === value) {
+      this.advanceLexer();
+    } else {
+      throw syntaxError(
+        this._lexer.source,
+        token.start,
+        `Expected "${value}", found ${getTokenDesc(token)}.`
+      );
+    }
+  }
+  /**
+   * If the next token is a given keyword, return "true" after advancing the lexer.
+   * Otherwise, do not change the parser state and return "false".
+   */
+  expectOptionalKeyword(value) {
+    const token = this._lexer.token;
+    if (token.kind === TokenKind.NAME && token.value === value) {
+      this.advanceLexer();
+      return true;
+    }
+    return false;
+  }
+  /**
+   * Helper function for creating an error when an unexpected lexed token is encountered.
+   */
+  unexpected(atToken) {
+    const token = atToken !== null && atToken !== void 0 ? atToken : this._lexer.token;
+    return syntaxError(
+      this._lexer.source,
+      token.start,
+      `Unexpected ${getTokenDesc(token)}.`
+    );
+  }
+  /**
+   * Returns a possibly empty list of parse nodes, determined by the parseFn.
+   * This list begins with a lex token of openKind and ends with a lex token of closeKind.
+   * Advances the parser to the next lex token after the closing token.
+   */
+  any(openKind, parseFn, closeKind) {
+    this.expectToken(openKind);
+    const nodes = [];
+    while (!this.expectOptionalToken(closeKind)) {
+      nodes.push(parseFn.call(this));
+    }
+    return nodes;
+  }
+  /**
+   * Returns a list of parse nodes, determined by the parseFn.
+   * It can be empty only if open token is missing otherwise it will always return non-empty list
+   * that begins with a lex token of openKind and ends with a lex token of closeKind.
+   * Advances the parser to the next lex token after the closing token.
+   */
+  optionalMany(openKind, parseFn, closeKind) {
+    if (this.expectOptionalToken(openKind)) {
+      const nodes = [];
+      do {
+        nodes.push(parseFn.call(this));
+      } while (!this.expectOptionalToken(closeKind));
+      return nodes;
+    }
+    return [];
+  }
+  /**
+   * Returns a non-empty list of parse nodes, determined by the parseFn.
+   * This list begins with a lex token of openKind and ends with a lex token of closeKind.
+   * Advances the parser to the next lex token after the closing token.
+   */
+  many(openKind, parseFn, closeKind) {
+    this.expectToken(openKind);
+    const nodes = [];
+    do {
+      nodes.push(parseFn.call(this));
+    } while (!this.expectOptionalToken(closeKind));
+    return nodes;
+  }
+  /**
+   * Returns a non-empty list of parse nodes, determined by the parseFn.
+   * This list may begin with a lex token of delimiterKind followed by items separated by lex tokens of tokenKind.
+   * Advances the parser to the next lex token after last item in the list.
+   */
+  delimitedMany(delimiterKind, parseFn) {
+    this.expectOptionalToken(delimiterKind);
+    const nodes = [];
+    do {
+      nodes.push(parseFn.call(this));
+    } while (this.expectOptionalToken(delimiterKind));
+    return nodes;
+  }
+  advanceLexer() {
+    const { maxTokens } = this._options;
+    const token = this._lexer.advance();
+    if (token.kind !== TokenKind.EOF) {
+      ++this._tokenCounter;
+      if (maxTokens !== void 0 && this._tokenCounter > maxTokens) {
+        throw syntaxError(
+          this._lexer.source,
+          token.start,
+          `Document contains more that ${maxTokens} tokens. Parsing aborted.`
+        );
+      }
+    }
+  }
+}
+function getTokenDesc(token) {
+  const value = token.value;
+  return getTokenKindDesc(token.kind) + (value != null ? ` "${value}"` : "");
+}
+function getTokenKindDesc(kind) {
+  return isPunctuatorTokenKind(kind) ? `"${kind}"` : kind;
+}
+function printString(str) {
+  return `"${str.replace(escapedRegExp, escapedReplacer)}"`;
+}
+const escapedRegExp = /[\x00-\x1f\x22\x5c\x7f-\x9f]/g;
+function escapedReplacer(str) {
+  return escapeSequences[str.charCodeAt(0)];
+}
+const escapeSequences = [
+  "\\u0000",
+  "\\u0001",
+  "\\u0002",
+  "\\u0003",
+  "\\u0004",
+  "\\u0005",
+  "\\u0006",
+  "\\u0007",
+  "\\b",
+  "\\t",
+  "\\n",
+  "\\u000B",
+  "\\f",
+  "\\r",
+  "\\u000E",
+  "\\u000F",
+  "\\u0010",
+  "\\u0011",
+  "\\u0012",
+  "\\u0013",
+  "\\u0014",
+  "\\u0015",
+  "\\u0016",
+  "\\u0017",
+  "\\u0018",
+  "\\u0019",
+  "\\u001A",
+  "\\u001B",
+  "\\u001C",
+  "\\u001D",
+  "\\u001E",
+  "\\u001F",
+  "",
+  "",
+  '\\"',
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  // 2F
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  // 3F
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  // 4F
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "\\\\",
+  "",
+  "",
+  "",
+  // 5F
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  // 6F
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "\\u007F",
+  "\\u0080",
+  "\\u0081",
+  "\\u0082",
+  "\\u0083",
+  "\\u0084",
+  "\\u0085",
+  "\\u0086",
+  "\\u0087",
+  "\\u0088",
+  "\\u0089",
+  "\\u008A",
+  "\\u008B",
+  "\\u008C",
+  "\\u008D",
+  "\\u008E",
+  "\\u008F",
+  "\\u0090",
+  "\\u0091",
+  "\\u0092",
+  "\\u0093",
+  "\\u0094",
+  "\\u0095",
+  "\\u0096",
+  "\\u0097",
+  "\\u0098",
+  "\\u0099",
+  "\\u009A",
+  "\\u009B",
+  "\\u009C",
+  "\\u009D",
+  "\\u009E",
+  "\\u009F"
+];
+const BREAK = Object.freeze({});
+function visit(root, visitor, visitorKeys = QueryDocumentKeys) {
+  const enterLeaveMap = /* @__PURE__ */ new Map();
+  for (const kind of Object.values(Kind)) {
+    enterLeaveMap.set(kind, getEnterLeaveForKind(visitor, kind));
+  }
+  let stack = void 0;
+  let inArray = Array.isArray(root);
+  let keys = [root];
+  let index = -1;
+  let edits = [];
+  let node2 = root;
+  let key = void 0;
+  let parent = void 0;
+  const path = [];
+  const ancestors = [];
+  do {
+    index++;
+    const isLeaving = index === keys.length;
+    const isEdited = isLeaving && edits.length !== 0;
+    if (isLeaving) {
+      key = ancestors.length === 0 ? void 0 : path[path.length - 1];
+      node2 = parent;
+      parent = ancestors.pop();
+      if (isEdited) {
+        if (inArray) {
+          node2 = node2.slice();
+          let editOffset = 0;
+          for (const [editKey, editValue] of edits) {
+            const arrayKey = editKey - editOffset;
+            if (editValue === null) {
+              node2.splice(arrayKey, 1);
+              editOffset++;
+            } else {
+              node2[arrayKey] = editValue;
+            }
+          }
+        } else {
+          node2 = { ...node2 };
+          for (const [editKey, editValue] of edits) {
+            node2[editKey] = editValue;
+          }
+        }
+      }
+      index = stack.index;
+      keys = stack.keys;
+      edits = stack.edits;
+      inArray = stack.inArray;
+      stack = stack.prev;
+    } else if (parent) {
+      key = inArray ? index : keys[index];
+      node2 = parent[key];
+      if (node2 === null || node2 === void 0) {
+        continue;
+      }
+      path.push(key);
+    }
+    let result;
+    if (!Array.isArray(node2)) {
+      var _enterLeaveMap$get, _enterLeaveMap$get2;
+      isNode(node2) || devAssert(false, `Invalid AST Node: ${inspect(node2)}.`);
+      const visitFn = isLeaving ? (_enterLeaveMap$get = enterLeaveMap.get(node2.kind)) === null || _enterLeaveMap$get === void 0 ? void 0 : _enterLeaveMap$get.leave : (_enterLeaveMap$get2 = enterLeaveMap.get(node2.kind)) === null || _enterLeaveMap$get2 === void 0 ? void 0 : _enterLeaveMap$get2.enter;
+      result = visitFn === null || visitFn === void 0 ? void 0 : visitFn.call(visitor, node2, key, parent, path, ancestors);
+      if (result === BREAK) {
+        break;
+      }
+      if (result === false) {
+        if (!isLeaving) {
+          path.pop();
+          continue;
+        }
+      } else if (result !== void 0) {
+        edits.push([key, result]);
+        if (!isLeaving) {
+          if (isNode(result)) {
+            node2 = result;
+          } else {
+            path.pop();
+            continue;
+          }
+        }
+      }
+    }
+    if (result === void 0 && isEdited) {
+      edits.push([key, node2]);
+    }
+    if (isLeaving) {
+      path.pop();
+    } else {
+      var _node$kind;
+      stack = {
+        inArray,
+        index,
+        keys,
+        edits,
+        prev: stack
+      };
+      inArray = Array.isArray(node2);
+      keys = inArray ? node2 : (_node$kind = visitorKeys[node2.kind]) !== null && _node$kind !== void 0 ? _node$kind : [];
+      index = -1;
+      edits = [];
+      if (parent) {
+        ancestors.push(parent);
+      }
+      parent = node2;
+    }
+  } while (stack !== void 0);
+  if (edits.length !== 0) {
+    return edits[edits.length - 1][1];
+  }
+  return root;
+}
+function getEnterLeaveForKind(visitor, kind) {
+  const kindVisitor = visitor[kind];
+  if (typeof kindVisitor === "object") {
+    return kindVisitor;
+  } else if (typeof kindVisitor === "function") {
+    return {
+      enter: kindVisitor,
+      leave: void 0
+    };
+  }
+  return {
+    enter: visitor.enter,
+    leave: visitor.leave
+  };
+}
+function print(ast) {
+  return visit(ast, printDocASTReducer);
+}
+const MAX_LINE_LENGTH = 80;
+const printDocASTReducer = {
+  Name: {
+    leave: (node2) => node2.value
+  },
+  Variable: {
+    leave: (node2) => "$" + node2.name
+  },
+  // Document
+  Document: {
+    leave: (node2) => join(node2.definitions, "\n\n")
+  },
+  OperationDefinition: {
+    leave(node2) {
+      const varDefs = hasMultilineItems(node2.variableDefinitions) ? wrap("(\n", join(node2.variableDefinitions, "\n"), "\n)") : wrap("(", join(node2.variableDefinitions, ", "), ")");
+      const prefix = wrap("", node2.description, "\n") + join(
+        [
+          node2.operation,
+          join([node2.name, varDefs]),
+          join(node2.directives, " ")
+        ],
+        " "
+      );
+      return (prefix === "query" ? "" : prefix + " ") + node2.selectionSet;
+    }
+  },
+  VariableDefinition: {
+    leave: ({ variable, type: type2, defaultValue, directives, description }) => wrap("", description, "\n") + variable + ": " + type2 + wrap(" = ", defaultValue) + wrap(" ", join(directives, " "))
+  },
+  SelectionSet: {
+    leave: ({ selections }) => block(selections)
+  },
+  Field: {
+    leave({ alias, name, arguments: args, directives, selectionSet }) {
+      const prefix = wrap("", alias, ": ") + name;
+      let argsLine = prefix + wrap("(", join(args, ", "), ")");
+      if (argsLine.length > MAX_LINE_LENGTH) {
+        argsLine = prefix + wrap("(\n", indent(join(args, "\n")), "\n)");
+      }
+      return join([argsLine, join(directives, " "), selectionSet], " ");
+    }
+  },
+  Argument: {
+    leave: ({ name, value }) => name + ": " + value
+  },
+  // Fragments
+  FragmentSpread: {
+    leave: ({ name, directives }) => "..." + name + wrap(" ", join(directives, " "))
+  },
+  InlineFragment: {
+    leave: ({ typeCondition, directives, selectionSet }) => join(
+      [
+        "...",
+        wrap("on ", typeCondition),
+        join(directives, " "),
+        selectionSet
+      ],
+      " "
+    )
+  },
+  FragmentDefinition: {
+    leave: ({
+      name,
+      typeCondition,
+      variableDefinitions,
+      directives,
+      selectionSet,
+      description
+    }) => wrap("", description, "\n") + // Note: fragment variable definitions are experimental and may be changed
+    // or removed in the future.
+    `fragment ${name}${wrap("(", join(variableDefinitions, ", "), ")")} on ${typeCondition} ${wrap("", join(directives, " "), " ")}` + selectionSet
+  },
+  // Value
+  IntValue: {
+    leave: ({ value }) => value
+  },
+  FloatValue: {
+    leave: ({ value }) => value
+  },
+  StringValue: {
+    leave: ({ value, block: isBlockString }) => isBlockString ? printBlockString(value) : printString(value)
+  },
+  BooleanValue: {
+    leave: ({ value }) => value ? "true" : "false"
+  },
+  NullValue: {
+    leave: () => "null"
+  },
+  EnumValue: {
+    leave: ({ value }) => value
+  },
+  ListValue: {
+    leave: ({ values }) => "[" + join(values, ", ") + "]"
+  },
+  ObjectValue: {
+    leave: ({ fields }) => "{" + join(fields, ", ") + "}"
+  },
+  ObjectField: {
+    leave: ({ name, value }) => name + ": " + value
+  },
+  // Directive
+  Directive: {
+    leave: ({ name, arguments: args }) => "@" + name + wrap("(", join(args, ", "), ")")
+  },
+  // Type
+  NamedType: {
+    leave: ({ name }) => name
+  },
+  ListType: {
+    leave: ({ type: type2 }) => "[" + type2 + "]"
+  },
+  NonNullType: {
+    leave: ({ type: type2 }) => type2 + "!"
+  },
+  // Type System Definitions
+  SchemaDefinition: {
+    leave: ({ description, directives, operationTypes }) => wrap("", description, "\n") + join(["schema", join(directives, " "), block(operationTypes)], " ")
+  },
+  OperationTypeDefinition: {
+    leave: ({ operation, type: type2 }) => operation + ": " + type2
+  },
+  ScalarTypeDefinition: {
+    leave: ({ description, name, directives }) => wrap("", description, "\n") + join(["scalar", name, join(directives, " ")], " ")
+  },
+  ObjectTypeDefinition: {
+    leave: ({ description, name, interfaces, directives, fields }) => wrap("", description, "\n") + join(
+      [
+        "type",
+        name,
+        wrap("implements ", join(interfaces, " & ")),
+        join(directives, " "),
+        block(fields)
+      ],
+      " "
+    )
+  },
+  FieldDefinition: {
+    leave: ({ description, name, arguments: args, type: type2, directives }) => wrap("", description, "\n") + name + (hasMultilineItems(args) ? wrap("(\n", indent(join(args, "\n")), "\n)") : wrap("(", join(args, ", "), ")")) + ": " + type2 + wrap(" ", join(directives, " "))
+  },
+  InputValueDefinition: {
+    leave: ({ description, name, type: type2, defaultValue, directives }) => wrap("", description, "\n") + join(
+      [name + ": " + type2, wrap("= ", defaultValue), join(directives, " ")],
+      " "
+    )
+  },
+  InterfaceTypeDefinition: {
+    leave: ({ description, name, interfaces, directives, fields }) => wrap("", description, "\n") + join(
+      [
+        "interface",
+        name,
+        wrap("implements ", join(interfaces, " & ")),
+        join(directives, " "),
+        block(fields)
+      ],
+      " "
+    )
+  },
+  UnionTypeDefinition: {
+    leave: ({ description, name, directives, types }) => wrap("", description, "\n") + join(
+      ["union", name, join(directives, " "), wrap("= ", join(types, " | "))],
+      " "
+    )
+  },
+  EnumTypeDefinition: {
+    leave: ({ description, name, directives, values }) => wrap("", description, "\n") + join(["enum", name, join(directives, " "), block(values)], " ")
+  },
+  EnumValueDefinition: {
+    leave: ({ description, name, directives }) => wrap("", description, "\n") + join([name, join(directives, " ")], " ")
+  },
+  InputObjectTypeDefinition: {
+    leave: ({ description, name, directives, fields }) => wrap("", description, "\n") + join(["input", name, join(directives, " "), block(fields)], " ")
+  },
+  DirectiveDefinition: {
+    leave: ({ description, name, arguments: args, repeatable, locations }) => wrap("", description, "\n") + "directive @" + name + (hasMultilineItems(args) ? wrap("(\n", indent(join(args, "\n")), "\n)") : wrap("(", join(args, ", "), ")")) + (repeatable ? " repeatable" : "") + " on " + join(locations, " | ")
+  },
+  SchemaExtension: {
+    leave: ({ directives, operationTypes }) => join(
+      ["extend schema", join(directives, " "), block(operationTypes)],
+      " "
+    )
+  },
+  ScalarTypeExtension: {
+    leave: ({ name, directives }) => join(["extend scalar", name, join(directives, " ")], " ")
+  },
+  ObjectTypeExtension: {
+    leave: ({ name, interfaces, directives, fields }) => join(
+      [
+        "extend type",
+        name,
+        wrap("implements ", join(interfaces, " & ")),
+        join(directives, " "),
+        block(fields)
+      ],
+      " "
+    )
+  },
+  InterfaceTypeExtension: {
+    leave: ({ name, interfaces, directives, fields }) => join(
+      [
+        "extend interface",
+        name,
+        wrap("implements ", join(interfaces, " & ")),
+        join(directives, " "),
+        block(fields)
+      ],
+      " "
+    )
+  },
+  UnionTypeExtension: {
+    leave: ({ name, directives, types }) => join(
+      [
+        "extend union",
+        name,
+        join(directives, " "),
+        wrap("= ", join(types, " | "))
+      ],
+      " "
+    )
+  },
+  EnumTypeExtension: {
+    leave: ({ name, directives, values }) => join(["extend enum", name, join(directives, " "), block(values)], " ")
+  },
+  InputObjectTypeExtension: {
+    leave: ({ name, directives, fields }) => join(["extend input", name, join(directives, " "), block(fields)], " ")
+  },
+  // Schema Coordinates
+  TypeCoordinate: {
+    leave: ({ name }) => name
+  },
+  MemberCoordinate: {
+    leave: ({ name, memberName }) => join([name, wrap(".", memberName)])
+  },
+  ArgumentCoordinate: {
+    leave: ({ name, fieldName, argumentName }) => join([name, wrap(".", fieldName), wrap("(", argumentName, ":)")])
+  },
+  DirectiveCoordinate: {
+    leave: ({ name }) => join(["@", name])
+  },
+  DirectiveArgumentCoordinate: {
+    leave: ({ name, argumentName }) => join(["@", name, wrap("(", argumentName, ":)")])
+  }
+};
+function join(maybeArray, separator = "") {
+  var _maybeArray$filter$jo;
+  return (_maybeArray$filter$jo = maybeArray === null || maybeArray === void 0 ? void 0 : maybeArray.filter((x) => x).join(separator)) !== null && _maybeArray$filter$jo !== void 0 ? _maybeArray$filter$jo : "";
+}
+function block(array) {
+  return wrap("{\n", indent(join(array, "\n")), "\n}");
+}
+function wrap(start, maybeString, end = "") {
+  return maybeString != null && maybeString !== "" ? start + maybeString + end : "";
+}
+function indent(str) {
+  return wrap("  ", str.replace(/\n/g, "\n  "));
+}
+function hasMultilineItems(maybeArray) {
+  var _maybeArray$some;
+  return (_maybeArray$some = maybeArray === null || maybeArray === void 0 ? void 0 : maybeArray.some((str) => str.includes("\n"))) !== null && _maybeArray$some !== void 0 ? _maybeArray$some : false;
+}
+const ACCEPT_HEADER = `Accept`;
+const CONTENT_TYPE_HEADER = `Content-Type`;
+const CONTENT_TYPE_JSON = `application/json`;
+const CONTENT_TYPE_GQL = `application/graphql-response+json`;
+const cleanQuery = (str) => str.replace(/([\s,]|#[^\n\r]+)+/g, ` `).trim();
+const isGraphQLContentType = (contentType) => {
+  const contentTypeLower = contentType.toLowerCase();
+  return contentTypeLower.includes(CONTENT_TYPE_GQL) || contentTypeLower.includes(CONTENT_TYPE_JSON);
+};
+const parseGraphQLExecutionResult = (result) => {
+  try {
+    if (Array.isArray(result)) {
+      return {
+        _tag: `Batch`,
+        executionResults: result.map(parseExecutionResult)
+      };
+    } else if (isPlainObject(result)) {
+      return {
+        _tag: `Single`,
+        executionResult: parseExecutionResult(result)
+      };
+    } else {
+      throw new Error(`Invalid execution result: result is not object or array. 
+Got:
+${String(result)}`);
+    }
+  } catch (e) {
+    return e;
+  }
+};
+const parseExecutionResult = (result) => {
+  if (typeof result !== `object` || result === null) {
+    throw new Error(`Invalid execution result: result is not object`);
+  }
+  let errors = void 0;
+  let data = void 0;
+  let extensions = void 0;
+  if (`errors` in result) {
+    if (!isPlainObject(result.errors) && !Array.isArray(result.errors)) {
+      throw new Error(`Invalid execution result: errors is not plain object OR array`);
+    }
+    errors = result.errors;
+  }
+  if (`data` in result) {
+    if (!isPlainObject(result.data) && result.data !== null) {
+      throw new Error(`Invalid execution result: data is not plain object`);
+    }
+    data = result.data;
+  }
+  if (`extensions` in result) {
+    if (!isPlainObject(result.extensions))
+      throw new Error(`Invalid execution result: extensions is not plain object`);
+    extensions = result.extensions;
+  }
+  return {
+    data,
+    errors,
+    extensions
+  };
+};
+const isRequestResultHaveErrors = (result) => result._tag === `Batch` ? result.executionResults.some(isExecutionResultHaveErrors) : isExecutionResultHaveErrors(result.executionResult);
+const isExecutionResultHaveErrors = (result) => Array.isArray(result.errors) ? result.errors.length > 0 : Boolean(result.errors);
+const isOperationDefinitionNode = (definition) => {
+  return typeof definition === `object` && definition !== null && `kind` in definition && definition.kind === Kind.OPERATION_DEFINITION;
+};
+const extractOperationName = (document2) => {
+  let operationName = void 0;
+  const defs = document2.definitions.filter(isOperationDefinitionNode);
+  if (defs.length === 1) {
+    operationName = defs[0].name?.value;
+  }
+  return operationName;
+};
+const extractIsMutation = (document2) => {
+  let isMutation = false;
+  const defs = document2.definitions.filter(isOperationDefinitionNode);
+  if (defs.length === 1) {
+    isMutation = defs[0].operation === `mutation`;
+  }
+  return isMutation;
+};
+const analyzeDocument = (document2, excludeOperationName) => {
+  const normalizedDocument = typeof document2 === `string` || `kind` in document2 ? document2 : String(document2);
+  const expression = typeof normalizedDocument === `string` ? normalizedDocument : print(normalizedDocument);
+  let isMutation = false;
+  let operationName = void 0;
+  if (excludeOperationName) {
+    return { expression, isMutation, operationName };
+  }
+  const docNode = tryCatch(() => typeof normalizedDocument === `string` ? parse(normalizedDocument) : normalizedDocument);
+  if (docNode instanceof Error) {
+    return { expression, isMutation, operationName };
+  }
+  operationName = extractOperationName(docNode);
+  isMutation = extractIsMutation(docNode);
+  return { expression, operationName, isMutation };
+};
+const defaultJsonSerializer = JSON;
+const runRequest = async (input) => {
+  const config = {
+    ...input,
+    method: input.request._tag === `Single` ? input.request.document.isMutation ? `POST` : uppercase(input.method ?? `post`) : input.request.hasMutations ? `POST` : uppercase(input.method ?? `post`),
+    fetchOptions: {
+      ...input.fetchOptions,
+      errorPolicy: input.fetchOptions.errorPolicy ?? `none`
+    }
+  };
+  const fetcher = createFetcher(config.method);
+  const fetchResponse = await fetcher(config);
+  const body = await fetchResponse.text();
+  let result;
+  try {
+    result = parseResultFromText(body, fetchResponse.headers.get(CONTENT_TYPE_HEADER), input.fetchOptions.jsonSerializer ?? defaultJsonSerializer);
+  } catch (error) {
+    result = error;
+  }
+  const clientResponseBase = {
+    status: fetchResponse.status,
+    headers: fetchResponse.headers,
+    body
+  };
+  if (!fetchResponse.ok) {
+    if (result instanceof Error) {
+      return new ClientError({ ...clientResponseBase }, {
+        query: input.request._tag === `Single` ? input.request.document.expression : input.request.query,
+        variables: input.request.variables
+      });
+    }
+    const clientResponse = result._tag === `Batch` ? { ...result.executionResults, ...clientResponseBase } : {
+      ...result.executionResult,
+      ...clientResponseBase
+    };
+    return new ClientError(clientResponse, {
+      query: input.request._tag === `Single` ? input.request.document.expression : input.request.query,
+      variables: input.request.variables
+    });
+  }
+  if (result instanceof Error)
+    throw result;
+  if (isRequestResultHaveErrors(result) && config.fetchOptions.errorPolicy === `none`) {
+    const clientResponse = result._tag === `Batch` ? { ...result.executionResults, ...clientResponseBase } : {
+      ...result.executionResult,
+      ...clientResponseBase
+    };
+    return new ClientError(clientResponse, {
+      query: input.request._tag === `Single` ? input.request.document.expression : input.request.query,
+      variables: input.request.variables
+    });
+  }
+  switch (result._tag) {
+    case `Single`:
+      return {
+        ...clientResponseBase,
+        ...executionResultClientResponseFields(config)(result.executionResult)
+      };
+    case `Batch`:
+      return {
+        ...clientResponseBase,
+        data: result.executionResults.map(executionResultClientResponseFields(config))
+      };
+    default:
+      casesExhausted(result);
+  }
+};
+const executionResultClientResponseFields = ($params) => (executionResult) => {
+  return {
+    extensions: executionResult.extensions,
+    data: executionResult.data,
+    errors: $params.fetchOptions.errorPolicy === `all` ? executionResult.errors : void 0
+  };
+};
+const parseResultFromText = (text, contentType, jsonSerializer) => {
+  if (contentType && isGraphQLContentType(contentType)) {
+    return parseGraphQLExecutionResult(jsonSerializer.parse(text));
+  } else {
+    return parseGraphQLExecutionResult(text);
+  }
+};
+const createFetcher = (method) => async (params) => {
+  const headers = new Headers(params.headers);
+  let searchParams = null;
+  let body = void 0;
+  if (!headers.has(ACCEPT_HEADER)) {
+    headers.set(ACCEPT_HEADER, [CONTENT_TYPE_GQL, CONTENT_TYPE_JSON].join(`, `));
+  }
+  if (method === `POST`) {
+    const $jsonSerializer = params.fetchOptions.jsonSerializer ?? defaultJsonSerializer;
+    body = $jsonSerializer.stringify(buildBody(params));
+    if (typeof body === `string` && !headers.has(CONTENT_TYPE_HEADER)) {
+      headers.set(CONTENT_TYPE_HEADER, CONTENT_TYPE_JSON);
+    }
+  } else {
+    searchParams = buildQueryParams(params);
+  }
+  const init = { method, headers, body, ...params.fetchOptions };
+  let url = new URL(params.url);
+  let initResolved = init;
+  if (params.middleware) {
+    const result = await Promise.resolve(params.middleware({
+      ...init,
+      url: params.url,
+      operationName: params.request._tag === `Single` ? params.request.document.operationName : void 0,
+      variables: params.request.variables
+    }));
+    const { url: urlNew, ...initNew } = result;
+    url = new URL(urlNew);
+    initResolved = initNew;
+  }
+  if (searchParams) {
+    searchParams.forEach((value, name) => {
+      url.searchParams.append(name, value);
+    });
+  }
+  const $fetch = params.fetch ?? fetch;
+  return await $fetch(url, initResolved);
+};
+const buildBody = (params) => {
+  switch (params.request._tag) {
+    case `Single`:
+      return {
+        query: params.request.document.expression,
+        variables: params.request.variables,
+        operationName: params.request.document.operationName
+      };
+    case `Batch`:
+      return zip(params.request.query, params.request.variables ?? []).map(([query, variables]) => ({
+        query,
+        variables
+      }));
+    default:
+      throw casesExhausted(params.request);
+  }
+};
+const buildQueryParams = (params) => {
+  const $jsonSerializer = params.fetchOptions.jsonSerializer ?? defaultJsonSerializer;
+  const searchParams = new URLSearchParams();
+  switch (params.request._tag) {
+    case `Single`: {
+      searchParams.append(`query`, cleanQuery(params.request.document.expression));
+      if (params.request.variables) {
+        searchParams.append(`variables`, $jsonSerializer.stringify(params.request.variables));
+      }
+      if (params.request.document.operationName) {
+        searchParams.append(`operationName`, params.request.document.operationName);
+      }
+      return searchParams;
+    }
+    case `Batch`: {
+      const variablesSerialized = params.request.variables?.map((v) => $jsonSerializer.stringify(v)) ?? [];
+      const queriesCleaned = params.request.query.map(cleanQuery);
+      const payload = zip(queriesCleaned, variablesSerialized).map(([query, variables]) => ({
+        query,
+        variables
+      }));
+      searchParams.append(`query`, $jsonSerializer.stringify(payload));
+      return searchParams;
+    }
+    default:
+      throw casesExhausted(params.request);
+  }
+};
+class GraphQLClient {
+  url;
+  requestConfig;
+  constructor(url, requestConfig = {}) {
+    this.url = url;
+    this.requestConfig = requestConfig;
+  }
+  /**
+   * Send a GraphQL query to the server.
+   */
+  rawRequest = async (...args) => {
+    const [queryOrOptions, variables, requestHeaders] = args;
+    const rawRequestOptions = parseRawRequestArgs(queryOrOptions, variables, requestHeaders);
+    const { headers, fetch: fetch2 = globalThis.fetch, method = `POST`, requestMiddleware, responseMiddleware, excludeOperationName, ...fetchOptions } = this.requestConfig;
+    const { url } = this;
+    if (rawRequestOptions.signal !== void 0) {
+      fetchOptions.signal = rawRequestOptions.signal;
+    }
+    const document2 = analyzeDocument(rawRequestOptions.query, excludeOperationName);
+    const response = await runRequest({
+      url,
+      request: {
+        _tag: `Single`,
+        document: document2,
+        variables: rawRequestOptions.variables
+      },
+      headers: {
+        ...HeadersInitToPlainObject(callOrIdentity(headers)),
+        ...HeadersInitToPlainObject(rawRequestOptions.requestHeaders)
+      },
+      fetch: fetch2,
+      method,
+      fetchOptions,
+      middleware: requestMiddleware
+    });
+    if (responseMiddleware) {
+      await responseMiddleware(response, {
+        operationName: document2.operationName,
+        variables,
+        url: this.url
+      });
+    }
+    if (response instanceof Error) {
+      throw response;
+    }
+    return response;
+  };
+  async request(documentOrOptions, ...variablesAndRequestHeaders) {
+    const [variables, requestHeaders] = variablesAndRequestHeaders;
+    const requestOptions = parseRequestArgs(documentOrOptions, variables, requestHeaders);
+    const { headers, fetch: fetch2 = globalThis.fetch, method = `POST`, requestMiddleware, responseMiddleware, excludeOperationName, ...fetchOptions } = this.requestConfig;
+    const { url } = this;
+    if (requestOptions.signal !== void 0) {
+      fetchOptions.signal = requestOptions.signal;
+    }
+    const analyzedDocument = analyzeDocument(requestOptions.document, excludeOperationName);
+    const response = await runRequest({
+      url,
+      request: {
+        _tag: `Single`,
+        document: analyzedDocument,
+        variables: requestOptions.variables
+      },
+      headers: {
+        ...HeadersInitToPlainObject(callOrIdentity(headers)),
+        ...HeadersInitToPlainObject(requestOptions.requestHeaders)
+      },
+      fetch: fetch2,
+      method,
+      fetchOptions,
+      middleware: requestMiddleware
+    });
+    if (responseMiddleware) {
+      await responseMiddleware(response, {
+        operationName: analyzedDocument.operationName,
+        variables: requestOptions.variables,
+        url: this.url
+      });
+    }
+    if (response instanceof Error) {
+      throw response;
+    }
+    return response.data;
+  }
+  async batchRequests(documentsOrOptions, requestHeaders) {
+    const batchRequestOptions = parseBatchRequestArgs(documentsOrOptions, requestHeaders);
+    const { headers, excludeOperationName, ...fetchOptions } = this.requestConfig;
+    if (batchRequestOptions.signal !== void 0) {
+      fetchOptions.signal = batchRequestOptions.signal;
+    }
+    const analyzedDocuments = batchRequestOptions.documents.map(({ document: document2 }) => analyzeDocument(document2, excludeOperationName));
+    const expressions = analyzedDocuments.map(({ expression }) => expression);
+    const hasMutations = analyzedDocuments.some(({ isMutation }) => isMutation);
+    const variables = batchRequestOptions.documents.map(({ variables: variables2 }) => variables2);
+    const response = await runRequest({
+      url: this.url,
+      request: {
+        _tag: `Batch`,
+        operationName: void 0,
+        query: expressions,
+        hasMutations,
+        variables
+      },
+      headers: {
+        ...HeadersInitToPlainObject(callOrIdentity(headers)),
+        ...HeadersInitToPlainObject(batchRequestOptions.requestHeaders)
+      },
+      fetch: this.requestConfig.fetch ?? globalThis.fetch,
+      method: this.requestConfig.method || `POST`,
+      fetchOptions,
+      middleware: this.requestConfig.requestMiddleware
+    });
+    if (this.requestConfig.responseMiddleware) {
+      await this.requestConfig.responseMiddleware(response, {
+        operationName: void 0,
+        variables,
+        url: this.url
+      });
+    }
+    if (response instanceof Error) {
+      throw response;
+    }
+    return response.data;
+  }
+  setHeaders(headers) {
+    this.requestConfig.headers = headers;
+    return this;
+  }
+  /**
+   * Attach a header to the client. All subsequent requests will have this header.
+   */
+  setHeader(key, value) {
+    const { headers } = this.requestConfig;
+    if (headers) {
+      headers[key] = value;
+    } else {
+      this.requestConfig.headers = { [key]: value };
+    }
+    return this;
+  }
+  /**
+   * Change the client endpoint. All subsequent requests will send to this endpoint.
+   */
+  setEndpoint(value) {
+    this.url = value;
+    return this;
+  }
+}
+async function request(urlOrOptions, document2, ...variablesAndRequestHeaders) {
+  const requestOptions = parseRequestExtendedArgs(urlOrOptions, document2, ...variablesAndRequestHeaders);
+  const client = new GraphQLClient(requestOptions.url);
+  return client.request({
+    ...requestOptions
+  });
+}
+const parseRequestArgs = (documentOrOptions, variables, requestHeaders) => {
+  return documentOrOptions.document ? documentOrOptions : {
+    document: documentOrOptions,
+    variables,
+    requestHeaders,
+    signal: void 0
+  };
+};
+const parseRequestExtendedArgs = (urlOrOptions, document2, ...variablesAndRequestHeaders) => {
+  const [variables, requestHeaders] = variablesAndRequestHeaders;
+  return {
+    url: urlOrOptions,
+    document: document2,
+    variables,
+    requestHeaders,
+    signal: void 0
+  };
+};
+const gql = (chunks, ...variables) => {
+  return chunks.reduce((acc, chunk, index) => `${acc}${chunk}${index in variables ? String(variables[index]) : ``}`, ``);
+};
+const ANILIST_API_URL = "https://graphql.anilist.co";
+const colors$1 = {
+  yellow: "\x1B[33m",
+  reset: "\x1B[0m"
+};
+function isRateLimitError$2(error) {
+  if (error && typeof error === "object") {
+    const err = error;
+    if (err.response?.status === 429 || err.statusCode === 429) {
+      return true;
+    }
+    if (err.message && /rate.?limit/i.test(err.message)) {
+      return true;
+    }
+  }
+  return false;
+}
+function logRateLimitWarning$1(source) {
+  console.log(`${colors$1.yellow}  ⚠️  Rate limited by ${source}. Please wait before trying again.${colors$1.reset}`);
+}
+function isReleased$1(media) {
+  const status = media.status?.toUpperCase() || "";
+  if (status === "NOT_YET_RELEASED" || status === "CANCELLED" || status === "HIATUS") {
+    return false;
+  }
+  return true;
+}
+const SEARCH_QUERY = gql`
+  query ($search: String) {
+    Media(search: $search, type: ANIME) {
+      id
+      title {
+        romaji
+        english
+        native
+      }
+      description
+      genres
+      coverImage {
+        large
+        extraLarge
+      }
+      bannerImage
+      episodes
+      duration
+      season
+      seasonYear
+      status
+      format
+      startDate {
+        year
+        month
+        day
+      }
+      endDate {
+        year
+        month
+        day
+      }
+      averageScore
+      studios {
+        nodes {
+          name
+        }
+      }
+    }
+  }
+`;
+const SEARCH_MULTIPLE_QUERY = gql`
+  query ($search: String, $page: Int, $perPage: Int) {
+    Page(page: $page, perPage: $perPage) {
+      media(search: $search, type: ANIME) {
+        id
+        title {
+          romaji
+          english
+          native
+        }
+        description
+        genres
+        coverImage {
+          large
+          extraLarge
+        }
+        bannerImage
+        episodes
+        duration
+        season
+        seasonYear
+        status
+        format
+        startDate {
+          year
+          month
+          day
+        }
+        endDate {
+          year
+          month
+          day
+        }
+        averageScore
+        studios {
+          nodes {
+            name
+          }
+        }
+      }
+    }
+  }
+`;
+const EPISODES_QUERY = gql`
+  query ($id: Int) {
+    Media(id: $id) {
+      id
+      streamingEpisodes {
+        title
+        thumbnail
+        url
+        site
+      }
+    }
+  }
+`;
+const anilistHandler = {
   async searchAnime(searchTerm) {
     try {
-      const response = await axios.get(`${JIKAN_API_URL}/anime`, {
-        params: {
-          q: searchTerm,
-          limit: 1
-        }
-      });
-      if (response.data?.data?.[0]) {
-        return response.data.data[0];
+      const variables = { search: searchTerm };
+      const data = await request(ANILIST_API_URL, SEARCH_QUERY, variables);
+      if (data?.Media) {
+        return data.Media;
       }
       return null;
     } catch (error) {
-      console.error("Error searching MyAnimeList:", error);
+      if (isRateLimitError$2(error)) {
+        logRateLimitWarning$1("AniList");
+        throw error;
+      }
+      console.error("Error searching AniList:", error);
       throw error;
     }
+  },
+  async searchAnimeMultiple(searchTerm, limit = 10) {
+    let retries = 0;
+    const maxRetries = 3;
+    while (retries < maxRetries) {
+      try {
+        const variables = { search: searchTerm, page: 1, perPage: limit };
+        const data = await request(ANILIST_API_URL, SEARCH_MULTIPLE_QUERY, variables);
+        return data?.Page?.media || [];
+      } catch (error) {
+        if (isRateLimitError$2(error) && retries < maxRetries) {
+          retries++;
+          const delaySeconds = retries * 2;
+          console.log(`  \x1B[33m⏳ Rate limited while searching AniList. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1B[0m`);
+          await new Promise((resolve2) => setTimeout(resolve2, delaySeconds * 1e3));
+        } else {
+          if (isRateLimitError$2(error)) {
+            logRateLimitWarning$1("AniList");
+          } else {
+            console.error("Error searching AniList (multiple):", error);
+          }
+          throw error;
+        }
+      }
+    }
+    return [];
+  },
+  async getEpisodes(animeId, totalEpisodes, seasonNumber) {
+    try {
+      const variables = { id: animeId };
+      const data = await request(
+        ANILIST_API_URL,
+        EPISODES_QUERY,
+        variables
+      );
+      const streamingMap = /* @__PURE__ */ new Map();
+      if (data?.Media?.streamingEpisodes) {
+        for (const ep of data.Media.streamingEpisodes) {
+          const match = ep.title?.match(/(?:Episode\s*)?(\d+)/i);
+          if (match) {
+            const epNum = parseInt(match[1], 10);
+            if (!streamingMap.has(epNum)) {
+              streamingMap.set(epNum, ep);
+            }
+          }
+        }
+        if (streamingMap.size === 0) {
+          data.Media.streamingEpisodes.forEach((ep, index) => {
+            streamingMap.set(index + 1, ep);
+          });
+        }
+      }
+      const episodeCount = totalEpisodes || streamingMap.size || 0;
+      const episodes = [];
+      for (let i = 1; i <= episodeCount; i++) {
+        const streamingEp = streamingMap.get(i);
+        episodes.push({
+          episodeNumber: i,
+          seasonNumber: seasonNumber ?? null,
+          title: streamingEp?.title || `Episode ${i}`,
+          description: null,
+          airDate: null,
+          thumbnail: streamingEp?.thumbnail || null
+        });
+      }
+      return episodes;
+    } catch (error) {
+      if (isRateLimitError$2(error)) {
+        logRateLimitWarning$1("AniList");
+        throw error;
+      }
+      console.error("Error fetching AniList episodes:", error);
+      if (totalEpisodes) {
+        return Array.from({ length: totalEpisodes }, (_, i) => ({
+          episodeNumber: i + 1,
+          seasonNumber: seasonNumber ?? null,
+          title: `Episode ${i + 1}`,
+          description: null,
+          airDate: null,
+          thumbnail: null
+        }));
+      }
+      return [];
+    }
+  },
+  async searchAndFetchMetadata(seriesName, seasonNumber, partNumber, folderEpisodeCount) {
+    try {
+      let searchQuery = seriesName;
+      if (partNumber !== null && partNumber !== void 0 && partNumber > 1) {
+        searchQuery = `${seriesName} Part ${partNumber}`;
+      } else if (seasonNumber !== null && seasonNumber !== void 0 && seasonNumber > 1) {
+        searchQuery = `${seriesName} Season ${seasonNumber}`;
+      }
+      const searchResults = await this.searchAnimeMultiple(searchQuery, 10);
+      console.log(`AniList search: "${searchQuery}" => ${searchResults.length} result(s).`);
+      if (searchResults.length === 0 && (partNumber && partNumber > 1 || seasonNumber && seasonNumber > 1)) {
+        const resultsWithoutSeason = await this.searchAnimeMultiple(seriesName, 10);
+        console.log(`AniList search (no season): "${seriesName}" => ${resultsWithoutSeason.length} result(s).`);
+        if (resultsWithoutSeason.length > 0) {
+          let foundValidResult2 = false;
+          for (let i = 0; i < resultsWithoutSeason.length; i++) {
+            const media = resultsWithoutSeason[i];
+            const title = media.title.romaji || media.title.english || media.title.native;
+            console.log(`  [${i + 1}/${resultsWithoutSeason.length}] Checking "\x1B[36m${title}\x1B[0m" - episodes: ${media.episodes ?? "unknown"}, status: ${media.status}`);
+            if (!isReleased$1(media)) continue;
+            if (folderEpisodeCount !== void 0) {
+              if (media.episodes === null || media.episodes < folderEpisodeCount) continue;
+            }
+            console.log(`  \x1B[32m✓\x1B[0m Accepting "\x1B[36m${title}\x1B[0m" - has ${media.episodes} episodes, folder has ${folderEpisodeCount ?? "unknown"}`);
+            foundValidResult2 = true;
+            let episodes;
+            let retries = 0;
+            const maxRetries = 3;
+            while (retries < maxRetries) {
+              try {
+                episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
+                break;
+              } catch (error) {
+                if (isRateLimitError$2(error) && retries < maxRetries) {
+                  retries++;
+                  const delaySeconds = retries * 2;
+                  console.log(`  \x1B[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1B[0m`);
+                  await new Promise((resolve2) => setTimeout(resolve2, delaySeconds * 1e3));
+                } else {
+                  throw error;
+                }
+              }
+            }
+            return this.formatMetadata(media, episodes, seasonNumber);
+          }
+          if (!foundValidResult2 && folderEpisodeCount !== void 0) {
+            for (let i = 0; i < resultsWithoutSeason.length; i++) {
+              const media = resultsWithoutSeason[i];
+              const title = media.title.romaji || media.title.english || media.title.native;
+              if (media.episodes === null) {
+                console.log(`  \x1B[33m⚠️\x1B[0m  Fallback: Accepting "\x1B[36m${title}\x1B[0m" with unknown episode count`);
+                let episodes;
+                let retries = 0;
+                const maxRetries = 3;
+                while (retries < maxRetries) {
+                  try {
+                    episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
+                    break;
+                  } catch (error) {
+                    if (isRateLimitError$2(error) && retries < maxRetries) {
+                      retries++;
+                      const delaySeconds = retries * 2;
+                      console.log(`  \x1B[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1B[0m`);
+                      await new Promise((resolve2) => setTimeout(resolve2, delaySeconds * 1e3));
+                    } else {
+                      throw error;
+                    }
+                  }
+                }
+                return this.formatMetadata(media, episodes, seasonNumber);
+              }
+            }
+            console.log(`AniList: No suitable results found for "${searchQuery}" or "${seriesName}".`);
+          }
+        }
+        return null;
+      }
+      let foundValidResult = false;
+      for (let i = 0; i < searchResults.length; i++) {
+        const media = searchResults[i];
+        const title = media.title.romaji || media.title.english || media.title.native;
+        console.log(`  [${i + 1}/${searchResults.length}] Checking "\x1B[36m${title}\x1B[0m" - episodes: ${media.episodes ?? "unknown"}, status: ${media.status}`);
+        if (!isReleased$1(media)) continue;
+        if (folderEpisodeCount !== void 0) {
+          if (media.episodes === null || media.episodes < folderEpisodeCount) continue;
+        }
+        console.log(`  \x1B[32m✓\x1B[0m Accepting "\x1B[36m${title}\x1B[0m" - has ${media.episodes} episodes, folder has ${folderEpisodeCount ?? "unknown"}`);
+        foundValidResult = true;
+        let episodes;
+        let retries = 0;
+        const maxRetries = 3;
+        while (retries < maxRetries) {
+          try {
+            episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
+            break;
+          } catch (error) {
+            if (isRateLimitError$2(error) && retries < maxRetries) {
+              retries++;
+              const delaySeconds = retries * 2;
+              console.log(`  \x1B[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1B[0m`);
+              await new Promise((resolve2) => setTimeout(resolve2, delaySeconds * 1e3));
+            } else {
+              throw error;
+            }
+          }
+        }
+        return this.formatMetadata(media, episodes, seasonNumber);
+      }
+      if (!foundValidResult && folderEpisodeCount !== void 0) {
+        for (let i = 0; i < searchResults.length; i++) {
+          const media = searchResults[i];
+          const title = media.title.romaji || media.title.english || media.title.native;
+          if (media.episodes === null) {
+            console.log(`  \x1B[33m⚠️\x1B[0m  Fallback: Accepting "\x1B[36m${title}\x1B[0m" with unknown episode count`);
+            let episodes;
+            let retries = 0;
+            const maxRetries = 3;
+            while (retries < maxRetries) {
+              try {
+                episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
+                break;
+              } catch (error) {
+                if (isRateLimitError$2(error) && retries < maxRetries) {
+                  retries++;
+                  const delaySeconds = retries * 2;
+                  console.log(`  \x1B[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1B[0m`);
+                  await new Promise((resolve2) => setTimeout(resolve2, delaySeconds * 1e3));
+                } else {
+                  throw error;
+                }
+              }
+            }
+            return this.formatMetadata(media, episodes, seasonNumber);
+          }
+        }
+        console.log(`  \x1B[33m⚠️\x1B[0m  No results with enough episodes found, or only found series with unknown episode counts.`);
+      }
+      return null;
+    } catch (error) {
+      if (isRateLimitError$2(error)) {
+        return null;
+      }
+      console.error("Error fetching AniList metadata:", error);
+      return null;
+    }
+  },
+  formatMetadata(media, episodes, seasonNumber) {
+    const formatDate = (date) => {
+      if (!date?.year) return null;
+      const year = date.year;
+      const month = String(date.month || 1).padStart(2, "0");
+      const day = String(date.day || 1).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    let title = media.title.english || media.title.romaji || media.title.native;
+    if (seasonNumber) {
+      title = `${title} (Season ${seasonNumber})`;
+    }
+    return {
+      seriesId: `anilist_${media.id}${seasonNumber ? `_s${seasonNumber.toString().padStart(2, "0")}` : ""}`,
+      title,
+      titleRomaji: media.title.romaji,
+      titleEnglish: media.title.english,
+      titleNative: media.title.native,
+      description: media.description || "",
+      genres: media.genres || [],
+      poster: media.coverImage?.extraLarge || media.coverImage?.large || null,
+      banner: media.bannerImage || null,
+      episodes,
+      totalEpisodes: media.episodes,
+      duration: media.duration,
+      season: media.season,
+      seasonYear: media.seasonYear,
+      status: media.status,
+      format: media.format,
+      averageScore: media.averageScore,
+      studios: media.studios?.nodes?.map((s) => s.name) || [],
+      startDate: formatDate(media.startDate),
+      endDate: formatDate(media.endDate),
+      anilistId: media.id
+    };
+  }
+};
+const JIKAN_API_URL = "https://api.jikan.moe/v4";
+const MAL_SEARCH_LIMIT = 10;
+const colors = {
+  yellow: "\x1B[33m",
+  reset: "\x1B[0m"
+};
+function isRateLimitError$1(error) {
+  if (axios.isAxiosError(error)) {
+    return error.response?.status === 429;
+  }
+  return false;
+}
+function logRateLimitWarning(source) {
+  console.log(`${colors.yellow}  ⚠️  Rate limited by ${source}. Please wait before trying again.${colors.reset}`);
+}
+function isReleased(anime) {
+  const status = anime.status?.toLowerCase() || "";
+  if (status.includes("not yet") || status.includes("not aired")) {
+    return false;
+  }
+  return true;
+}
+const malHandler = {
+  async searchAnime(searchTerm, limit = MAL_SEARCH_LIMIT) {
+    let retries = 0;
+    const maxRetries = 3;
+    while (retries < maxRetries) {
+      try {
+        const response = await axios.get(`${JIKAN_API_URL}/anime`, {
+          params: {
+            q: searchTerm,
+            limit
+          }
+        });
+        return response.data?.data || [];
+      } catch (error) {
+        if (isRateLimitError$1(error) && retries < maxRetries) {
+          retries++;
+          const delaySeconds = retries * 2;
+          console.log(`  \x1B[33m⏳ Rate limited while searching MAL. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1B[0m`);
+          await new Promise((resolve2) => setTimeout(resolve2, delaySeconds * 1e3));
+        } else {
+          if (isRateLimitError$1(error)) {
+            logRateLimitWarning("MAL");
+          } else {
+            console.error("Error searching MyAnimeList:", error);
+          }
+          throw error;
+        }
+      }
+    }
+    return [];
   },
   async getEpisodes(animeId, totalEpisodes, seasonNumber) {
     try {
@@ -13092,8 +13411,8 @@ const malHandler = {
       const fetchedEpisodeMap = /* @__PURE__ */ new Map();
       if (response.data?.data) {
         for (const ep of response.data.data) {
-          const epNum = ep.mal_id || ep.episode;
-          if (epNum) {
+          const epNum = ep.episode;
+          if (epNum && epNum > 0) {
             fetchedEpisodeMap.set(epNum, ep);
           }
         }
@@ -13113,6 +13432,10 @@ const malHandler = {
       }
       return episodes;
     } catch (error) {
+      if (isRateLimitError$1(error)) {
+        logRateLimitWarning("MAL");
+        throw error;
+      }
       console.error("Error fetching MAL episodes:", error);
       if (totalEpisodes) {
         return Array.from({ length: totalEpisodes }, (_, i) => ({
@@ -13127,23 +13450,127 @@ const malHandler = {
       return [];
     }
   },
-  async searchAndFetchMetadata(seriesName, seasonNumber) {
+  async searchAndFetchMetadata(seriesName, seasonNumber, partNumber, folderEpisodeCount) {
     try {
-      const searchQuery = seasonNumber ? `${seriesName} Season ${seasonNumber}` : seriesName;
-      const anime = await this.searchAnime(searchQuery);
-      if (!anime) {
-        if (seasonNumber) {
-          const animeWithoutSeason = await this.searchAnime(seriesName);
-          if (animeWithoutSeason) {
-            const episodes2 = await this.getEpisodes(animeWithoutSeason.mal_id, animeWithoutSeason.episodes, seasonNumber);
-            return this.formatMetadata(animeWithoutSeason, episodes2, seasonNumber);
+      const searchVariations = [seriesName];
+      if (/^\d+$/.test(seriesName.trim())) {
+        const num = parseInt(seriesName.trim(), 10);
+        if (num === 86) {
+          searchVariations.push("eighty six", "86 anime", "86 -eighty six-");
+        }
+      }
+      let searchQuery = seriesName;
+      if (partNumber !== null && partNumber !== void 0 && partNumber > 1) {
+        searchQuery = `${seriesName} Part ${partNumber}`;
+      } else if (seasonNumber !== null && seasonNumber !== void 0 && seasonNumber > 1) {
+        searchQuery = `${seriesName} Season ${seasonNumber}`;
+      }
+      let searchResults = await this.searchAnime(searchQuery, MAL_SEARCH_LIMIT);
+      console.log(`MAL search: "${searchQuery}" => ${searchResults.length} result(s).`);
+      if (searchResults.length === 0 && searchVariations.length > 1) {
+        for (const variation of searchVariations.slice(1)) {
+          let variationQuery = variation;
+          if (partNumber !== null && partNumber !== void 0 && partNumber > 1) {
+            variationQuery = `${variation} Part ${partNumber}`;
+          } else if (seasonNumber !== null && seasonNumber !== void 0 && seasonNumber > 1) {
+            variationQuery = `${variation} Season ${seasonNumber}`;
+          }
+          searchResults = await this.searchAnime(variationQuery, MAL_SEARCH_LIMIT);
+          console.log(`MAL search (variation): "${variationQuery}" => ${searchResults.length} result(s).`);
+          if (searchResults.length > 0) {
+            searchQuery = variationQuery;
+            break;
           }
         }
+      }
+      if (searchResults.length === 0 && (partNumber && partNumber > 1 || seasonNumber && seasonNumber > 1)) {
+        const resultsWithoutSeason = await this.searchAnime(seriesName, MAL_SEARCH_LIMIT);
+        console.log(`MAL search (no season): "${seriesName}" => ${resultsWithoutSeason.length} result(s).`);
+        if (resultsWithoutSeason.length > 0) {
+          let foundValidResult2 = false;
+          for (const anime of resultsWithoutSeason) {
+            if (!isReleased(anime) || folderEpisodeCount !== void 0 && (anime.episodes === null || anime.episodes < folderEpisodeCount)) continue;
+            foundValidResult2 = true;
+            const episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+            console.log(`MAL accepted: "${anime.title}"`);
+            return this.formatMetadata(anime, episodes, seasonNumber);
+          }
+          if (!foundValidResult2 && folderEpisodeCount !== void 0) {
+            for (const anime of resultsWithoutSeason) {
+              if (anime.episodes === null) {
+                const episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+                console.log(`MAL fallback accepted: "${anime.title}" (unknown episode count)`);
+                return this.formatMetadata(anime, episodes, seasonNumber);
+              }
+            }
+          }
+        }
+        console.log(`MAL: No suitable results found for "${searchQuery}" or "${seriesName}".`);
         return null;
       }
-      const episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
-      return this.formatMetadata(anime, episodes, seasonNumber);
+      let foundValidResult = false;
+      for (let i = 0; i < searchResults.length; i++) {
+        const anime = searchResults[i];
+        console.log(`  [${i + 1}/${searchResults.length}] Checking "\x1B[36m${anime.title}\x1B[0m" - episodes: ${anime.episodes ?? "unknown"}, status: ${anime.status}`);
+        if (!isReleased(anime)) continue;
+        if (folderEpisodeCount !== void 0) {
+          if (anime.episodes === null || anime.episodes < folderEpisodeCount) continue;
+        }
+        console.log(`  \x1B[32m✓\x1B[0m Accepting "${anime.title}" - has ${anime.episodes} episodes, folder has ${folderEpisodeCount ?? "unknown"}`);
+        foundValidResult = true;
+        let episodes;
+        let retries = 0;
+        const maxRetries = 3;
+        while (retries < maxRetries) {
+          try {
+            episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+            break;
+          } catch (error) {
+            if (isRateLimitError$1(error) && retries < maxRetries) {
+              retries++;
+              const delaySeconds = retries * 2;
+              console.log(`  \x1B[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1B[0m`);
+              await new Promise((resolve2) => setTimeout(resolve2, delaySeconds * 1e3));
+            } else {
+              throw error;
+            }
+          }
+        }
+        return this.formatMetadata(anime, episodes, seasonNumber);
+      }
+      if (!foundValidResult && folderEpisodeCount !== void 0) {
+        for (let i = 0; i < searchResults.length; i++) {
+          const anime = searchResults[i];
+          if (anime.episodes === null) {
+            console.log(`  \x1B[33m⚠️\x1B[0m  Fallback: Accepting "${anime.title}" with unknown episode count`);
+            let episodes;
+            let retries = 0;
+            const maxRetries = 3;
+            while (retries < maxRetries) {
+              try {
+                episodes = await this.getEpisodes(anime.mal_id, anime.episodes, seasonNumber);
+                break;
+              } catch (error) {
+                if (isRateLimitError$1(error) && retries < maxRetries) {
+                  retries++;
+                  const delaySeconds = retries * 2;
+                  console.log(`  \x1B[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1B[0m`);
+                  await new Promise((resolve2) => setTimeout(resolve2, delaySeconds * 1e3));
+                } else {
+                  throw error;
+                }
+              }
+            }
+            return this.formatMetadata(anime, episodes, seasonNumber);
+          }
+        }
+        console.log(`  \x1B[33m⚠️\x1B[0m  No results with enough episodes found, or only found series with unknown episode counts.`);
+      }
+      return null;
     } catch (error) {
+      if (isRateLimitError$1(error)) {
+        return null;
+      }
       console.error("Error fetching MAL metadata:", error);
       return null;
     }
@@ -13246,6 +13673,18 @@ const metadataHandler = {
       console.error("Error getting series metadata:", error);
       return null;
     }
+  },
+  async deleteSeriesMetadata(seriesId) {
+    try {
+      const metadata = await this.loadMetadata();
+      delete metadata[seriesId];
+      const metadataPath = getMetadataPath();
+      await writeFile(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
+      return true;
+    } catch (error) {
+      console.error("Error deleting series metadata:", error);
+      throw error;
+    }
   }
 };
 const DEFAULT_CONFIG = {
@@ -13297,6 +13736,20 @@ const configHandler = {
   },
   async addFolderSource(folderPath) {
     try {
+      if (!folderPath || typeof folderPath !== "string" || folderPath.trim().length === 0) {
+        throw new Error("Folder path is required and must be a non-empty string");
+      }
+      try {
+        const stats = await stat(folderPath);
+        if (!stats.isDirectory()) {
+          throw new Error(`Path is not a directory: ${folderPath}`);
+        }
+      } catch (error) {
+        if (error.code === "ENOENT") {
+          throw new Error(`Folder does not exist: ${folderPath}`);
+        }
+        throw error;
+      }
       const config = await this.loadConfig();
       if (!config.folderSources.includes(folderPath)) {
         config.folderSources.push(folderPath);
@@ -13324,6 +13777,954 @@ const configHandler = {
     return config.folderSources;
   }
 };
+var eta;
+var hasRequiredEta;
+function requireEta() {
+  if (hasRequiredEta) return eta;
+  hasRequiredEta = 1;
+  class ETA {
+    constructor(length, initTime, initValue) {
+      this.etaBufferLength = length || 100;
+      this.valueBuffer = [initValue];
+      this.timeBuffer = [initTime];
+      this.eta = "0";
+    }
+    // add new values to calculation buffer
+    update(time, value, total) {
+      this.valueBuffer.push(value);
+      this.timeBuffer.push(time);
+      this.calculate(total - value);
+    }
+    // fetch estimated time
+    getTime() {
+      return this.eta;
+    }
+    // eta calculation - request number of remaining events
+    calculate(remaining) {
+      const currentBufferSize = this.valueBuffer.length;
+      const buffer = Math.min(this.etaBufferLength, currentBufferSize);
+      const v_diff = this.valueBuffer[currentBufferSize - 1] - this.valueBuffer[currentBufferSize - buffer];
+      const t_diff = this.timeBuffer[currentBufferSize - 1] - this.timeBuffer[currentBufferSize - buffer];
+      const vt_rate = v_diff / t_diff;
+      this.valueBuffer = this.valueBuffer.slice(-this.etaBufferLength);
+      this.timeBuffer = this.timeBuffer.slice(-this.etaBufferLength);
+      const eta2 = Math.ceil(remaining / vt_rate / 1e3);
+      if (isNaN(eta2)) {
+        this.eta = "NULL";
+      } else if (!isFinite(eta2)) {
+        this.eta = "INF";
+      } else if (eta2 > 1e7) {
+        this.eta = "INF";
+      } else if (eta2 < 0) {
+        this.eta = 0;
+      } else {
+        this.eta = eta2;
+      }
+    }
+  }
+  eta = ETA;
+  return eta;
+}
+var terminal;
+var hasRequiredTerminal;
+function requireTerminal() {
+  if (hasRequiredTerminal) return terminal;
+  hasRequiredTerminal = 1;
+  const _readline = require$$0$3;
+  class Terminal {
+    constructor(outputStream) {
+      this.stream = outputStream;
+      this.linewrap = true;
+      this.dy = 0;
+    }
+    // save cursor position + settings
+    cursorSave() {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      this.stream.write("\x1B7");
+    }
+    // restore last cursor position + settings
+    cursorRestore() {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      this.stream.write("\x1B8");
+    }
+    // show/hide cursor
+    cursor(enabled) {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      if (enabled) {
+        this.stream.write("\x1B[?25h");
+      } else {
+        this.stream.write("\x1B[?25l");
+      }
+    }
+    // change cursor positionn
+    cursorTo(x = null, y = null) {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      _readline.cursorTo(this.stream, x, y);
+    }
+    // change relative cursor position
+    cursorRelative(dx = null, dy = null) {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      this.dy = this.dy + dy;
+      _readline.moveCursor(this.stream, dx, dy);
+    }
+    // relative reset
+    cursorRelativeReset() {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      _readline.moveCursor(this.stream, 0, -this.dy);
+      _readline.cursorTo(this.stream, 0, null);
+      this.dy = 0;
+    }
+    // clear to the right from cursor
+    clearRight() {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      _readline.clearLine(this.stream, 1);
+    }
+    // clear the full line
+    clearLine() {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      _readline.clearLine(this.stream, 0);
+    }
+    // clear everyting beyond the current line
+    clearBottom() {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      _readline.clearScreenDown(this.stream);
+    }
+    // add new line; increment counter
+    newline() {
+      this.stream.write("\n");
+      this.dy++;
+    }
+    // write content to output stream
+    // @TODO use string-width to strip length
+    write(s, rawWrite = false) {
+      if (this.linewrap === true && rawWrite === false) {
+        this.stream.write(s.substr(0, this.getWidth()));
+      } else {
+        this.stream.write(s);
+      }
+    }
+    // control line wrapping
+    lineWrapping(enabled) {
+      if (!this.stream.isTTY) {
+        return;
+      }
+      this.linewrap = enabled;
+      if (enabled) {
+        this.stream.write("\x1B[?7h");
+      } else {
+        this.stream.write("\x1B[?7l");
+      }
+    }
+    // tty environment ?
+    isTTY() {
+      return this.stream.isTTY === true;
+    }
+    // get terminal width
+    getWidth() {
+      return this.stream.columns || (this.stream.isTTY ? 80 : 200);
+    }
+  }
+  terminal = Terminal;
+  return terminal;
+}
+var stringWidth = { exports: {} };
+var ansiRegex;
+var hasRequiredAnsiRegex;
+function requireAnsiRegex() {
+  if (hasRequiredAnsiRegex) return ansiRegex;
+  hasRequiredAnsiRegex = 1;
+  ansiRegex = ({ onlyFirst = false } = {}) => {
+    const pattern = [
+      "[\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)",
+      "(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~]))"
+    ].join("|");
+    return new RegExp(pattern, onlyFirst ? void 0 : "g");
+  };
+  return ansiRegex;
+}
+var stripAnsi;
+var hasRequiredStripAnsi;
+function requireStripAnsi() {
+  if (hasRequiredStripAnsi) return stripAnsi;
+  hasRequiredStripAnsi = 1;
+  const ansiRegex2 = requireAnsiRegex();
+  stripAnsi = (string) => typeof string === "string" ? string.replace(ansiRegex2(), "") : string;
+  return stripAnsi;
+}
+var isFullwidthCodePoint = { exports: {} };
+var hasRequiredIsFullwidthCodePoint;
+function requireIsFullwidthCodePoint() {
+  if (hasRequiredIsFullwidthCodePoint) return isFullwidthCodePoint.exports;
+  hasRequiredIsFullwidthCodePoint = 1;
+  const isFullwidthCodePoint$1 = (codePoint) => {
+    if (Number.isNaN(codePoint)) {
+      return false;
+    }
+    if (codePoint >= 4352 && (codePoint <= 4447 || // Hangul Jamo
+    codePoint === 9001 || // LEFT-POINTING ANGLE BRACKET
+    codePoint === 9002 || // RIGHT-POINTING ANGLE BRACKET
+    // CJK Radicals Supplement .. Enclosed CJK Letters and Months
+    11904 <= codePoint && codePoint <= 12871 && codePoint !== 12351 || // Enclosed CJK Letters and Months .. CJK Unified Ideographs Extension A
+    12880 <= codePoint && codePoint <= 19903 || // CJK Unified Ideographs .. Yi Radicals
+    19968 <= codePoint && codePoint <= 42182 || // Hangul Jamo Extended-A
+    43360 <= codePoint && codePoint <= 43388 || // Hangul Syllables
+    44032 <= codePoint && codePoint <= 55203 || // CJK Compatibility Ideographs
+    63744 <= codePoint && codePoint <= 64255 || // Vertical Forms
+    65040 <= codePoint && codePoint <= 65049 || // CJK Compatibility Forms .. Small Form Variants
+    65072 <= codePoint && codePoint <= 65131 || // Halfwidth and Fullwidth Forms
+    65281 <= codePoint && codePoint <= 65376 || 65504 <= codePoint && codePoint <= 65510 || // Kana Supplement
+    110592 <= codePoint && codePoint <= 110593 || // Enclosed Ideographic Supplement
+    127488 <= codePoint && codePoint <= 127569 || // CJK Unified Ideographs Extension B .. Tertiary Ideographic Plane
+    131072 <= codePoint && codePoint <= 262141)) {
+      return true;
+    }
+    return false;
+  };
+  isFullwidthCodePoint.exports = isFullwidthCodePoint$1;
+  isFullwidthCodePoint.exports.default = isFullwidthCodePoint$1;
+  return isFullwidthCodePoint.exports;
+}
+var emojiRegex;
+var hasRequiredEmojiRegex;
+function requireEmojiRegex() {
+  if (hasRequiredEmojiRegex) return emojiRegex;
+  hasRequiredEmojiRegex = 1;
+  emojiRegex = function() {
+    return /\uD83C\uDFF4\uDB40\uDC67\uDB40\uDC62(?:\uDB40\uDC65\uDB40\uDC6E\uDB40\uDC67|\uDB40\uDC73\uDB40\uDC63\uDB40\uDC74|\uDB40\uDC77\uDB40\uDC6C\uDB40\uDC73)\uDB40\uDC7F|\uD83D\uDC68(?:\uD83C\uDFFC\u200D(?:\uD83E\uDD1D\u200D\uD83D\uDC68\uD83C\uDFFB|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\uD83C\uDFFF\u200D(?:\uD83E\uDD1D\u200D\uD83D\uDC68(?:\uD83C[\uDFFB-\uDFFE])|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\uD83C\uDFFE\u200D(?:\uD83E\uDD1D\u200D\uD83D\uDC68(?:\uD83C[\uDFFB-\uDFFD])|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\uD83C\uDFFD\u200D(?:\uD83E\uDD1D\u200D\uD83D\uDC68(?:\uD83C[\uDFFB\uDFFC])|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\u200D(?:\u2764\uFE0F\u200D(?:\uD83D\uDC8B\u200D)?\uD83D\uDC68|(?:\uD83D[\uDC68\uDC69])\u200D(?:\uD83D\uDC66\u200D\uD83D\uDC66|\uD83D\uDC67\u200D(?:\uD83D[\uDC66\uDC67]))|\uD83D\uDC66\u200D\uD83D\uDC66|\uD83D\uDC67\u200D(?:\uD83D[\uDC66\uDC67])|(?:\uD83D[\uDC68\uDC69])\u200D(?:\uD83D[\uDC66\uDC67])|[\u2695\u2696\u2708]\uFE0F|\uD83D[\uDC66\uDC67]|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|(?:\uD83C\uDFFB\u200D[\u2695\u2696\u2708]|\uD83C\uDFFF\u200D[\u2695\u2696\u2708]|\uD83C\uDFFE\u200D[\u2695\u2696\u2708]|\uD83C\uDFFD\u200D[\u2695\u2696\u2708]|\uD83C\uDFFC\u200D[\u2695\u2696\u2708])\uFE0F|\uD83C\uDFFB\u200D(?:\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\uD83C[\uDFFB-\uDFFF])|(?:\uD83E\uDDD1\uD83C\uDFFB\u200D\uD83E\uDD1D\u200D\uD83E\uDDD1|\uD83D\uDC69\uD83C\uDFFC\u200D\uD83E\uDD1D\u200D\uD83D\uDC69)\uD83C\uDFFB|\uD83E\uDDD1(?:\uD83C\uDFFF\u200D\uD83E\uDD1D\u200D\uD83E\uDDD1(?:\uD83C[\uDFFB-\uDFFF])|\u200D\uD83E\uDD1D\u200D\uD83E\uDDD1)|(?:\uD83E\uDDD1\uD83C\uDFFE\u200D\uD83E\uDD1D\u200D\uD83E\uDDD1|\uD83D\uDC69\uD83C\uDFFF\u200D\uD83E\uDD1D\u200D(?:\uD83D[\uDC68\uDC69]))(?:\uD83C[\uDFFB-\uDFFE])|(?:\uD83E\uDDD1\uD83C\uDFFC\u200D\uD83E\uDD1D\u200D\uD83E\uDDD1|\uD83D\uDC69\uD83C\uDFFD\u200D\uD83E\uDD1D\u200D\uD83D\uDC69)(?:\uD83C[\uDFFB\uDFFC])|\uD83D\uDC69(?:\uD83C\uDFFE\u200D(?:\uD83E\uDD1D\u200D\uD83D\uDC68(?:\uD83C[\uDFFB-\uDFFD\uDFFF])|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\uD83C\uDFFC\u200D(?:\uD83E\uDD1D\u200D\uD83D\uDC68(?:\uD83C[\uDFFB\uDFFD-\uDFFF])|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\uD83C\uDFFB\u200D(?:\uD83E\uDD1D\u200D\uD83D\uDC68(?:\uD83C[\uDFFC-\uDFFF])|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\uD83C\uDFFD\u200D(?:\uD83E\uDD1D\u200D\uD83D\uDC68(?:\uD83C[\uDFFB\uDFFC\uDFFE\uDFFF])|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\u200D(?:\u2764\uFE0F\u200D(?:\uD83D\uDC8B\u200D(?:\uD83D[\uDC68\uDC69])|\uD83D[\uDC68\uDC69])|\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD])|\uD83C\uDFFF\u200D(?:\uD83C[\uDF3E\uDF73\uDF93\uDFA4\uDFA8\uDFEB\uDFED]|\uD83D[\uDCBB\uDCBC\uDD27\uDD2C\uDE80\uDE92]|\uD83E[\uDDAF-\uDDB3\uDDBC\uDDBD]))|\uD83D\uDC69\u200D\uD83D\uDC69\u200D(?:\uD83D\uDC66\u200D\uD83D\uDC66|\uD83D\uDC67\u200D(?:\uD83D[\uDC66\uDC67]))|(?:\uD83E\uDDD1\uD83C\uDFFD\u200D\uD83E\uDD1D\u200D\uD83E\uDDD1|\uD83D\uDC69\uD83C\uDFFE\u200D\uD83E\uDD1D\u200D\uD83D\uDC69)(?:\uD83C[\uDFFB-\uDFFD])|\uD83D\uDC69\u200D\uD83D\uDC66\u200D\uD83D\uDC66|\uD83D\uDC69\u200D\uD83D\uDC69\u200D(?:\uD83D[\uDC66\uDC67])|(?:\uD83D\uDC41\uFE0F\u200D\uD83D\uDDE8|\uD83D\uDC69(?:\uD83C\uDFFF\u200D[\u2695\u2696\u2708]|\uD83C\uDFFE\u200D[\u2695\u2696\u2708]|\uD83C\uDFFC\u200D[\u2695\u2696\u2708]|\uD83C\uDFFB\u200D[\u2695\u2696\u2708]|\uD83C\uDFFD\u200D[\u2695\u2696\u2708]|\u200D[\u2695\u2696\u2708])|(?:(?:\u26F9|\uD83C[\uDFCB\uDFCC]|\uD83D\uDD75)\uFE0F|\uD83D\uDC6F|\uD83E[\uDD3C\uDDDE\uDDDF])\u200D[\u2640\u2642]|(?:\u26F9|\uD83C[\uDFCB\uDFCC]|\uD83D\uDD75)(?:\uD83C[\uDFFB-\uDFFF])\u200D[\u2640\u2642]|(?:\uD83C[\uDFC3\uDFC4\uDFCA]|\uD83D[\uDC6E\uDC71\uDC73\uDC77\uDC81\uDC82\uDC86\uDC87\uDE45-\uDE47\uDE4B\uDE4D\uDE4E\uDEA3\uDEB4-\uDEB6]|\uD83E[\uDD26\uDD37-\uDD39\uDD3D\uDD3E\uDDB8\uDDB9\uDDCD-\uDDCF\uDDD6-\uDDDD])(?:(?:\uD83C[\uDFFB-\uDFFF])\u200D[\u2640\u2642]|\u200D[\u2640\u2642])|\uD83C\uDFF4\u200D\u2620)\uFE0F|\uD83D\uDC69\u200D\uD83D\uDC67\u200D(?:\uD83D[\uDC66\uDC67])|\uD83C\uDFF3\uFE0F\u200D\uD83C\uDF08|\uD83D\uDC15\u200D\uD83E\uDDBA|\uD83D\uDC69\u200D\uD83D\uDC66|\uD83D\uDC69\u200D\uD83D\uDC67|\uD83C\uDDFD\uD83C\uDDF0|\uD83C\uDDF4\uD83C\uDDF2|\uD83C\uDDF6\uD83C\uDDE6|[#\*0-9]\uFE0F\u20E3|\uD83C\uDDE7(?:\uD83C[\uDDE6\uDDE7\uDDE9-\uDDEF\uDDF1-\uDDF4\uDDF6-\uDDF9\uDDFB\uDDFC\uDDFE\uDDFF])|\uD83C\uDDF9(?:\uD83C[\uDDE6\uDDE8\uDDE9\uDDEB-\uDDED\uDDEF-\uDDF4\uDDF7\uDDF9\uDDFB\uDDFC\uDDFF])|\uD83C\uDDEA(?:\uD83C[\uDDE6\uDDE8\uDDEA\uDDEC\uDDED\uDDF7-\uDDFA])|\uD83E\uDDD1(?:\uD83C[\uDFFB-\uDFFF])|\uD83C\uDDF7(?:\uD83C[\uDDEA\uDDF4\uDDF8\uDDFA\uDDFC])|\uD83D\uDC69(?:\uD83C[\uDFFB-\uDFFF])|\uD83C\uDDF2(?:\uD83C[\uDDE6\uDDE8-\uDDED\uDDF0-\uDDFF])|\uD83C\uDDE6(?:\uD83C[\uDDE8-\uDDEC\uDDEE\uDDF1\uDDF2\uDDF4\uDDF6-\uDDFA\uDDFC\uDDFD\uDDFF])|\uD83C\uDDF0(?:\uD83C[\uDDEA\uDDEC-\uDDEE\uDDF2\uDDF3\uDDF5\uDDF7\uDDFC\uDDFE\uDDFF])|\uD83C\uDDED(?:\uD83C[\uDDF0\uDDF2\uDDF3\uDDF7\uDDF9\uDDFA])|\uD83C\uDDE9(?:\uD83C[\uDDEA\uDDEC\uDDEF\uDDF0\uDDF2\uDDF4\uDDFF])|\uD83C\uDDFE(?:\uD83C[\uDDEA\uDDF9])|\uD83C\uDDEC(?:\uD83C[\uDDE6\uDDE7\uDDE9-\uDDEE\uDDF1-\uDDF3\uDDF5-\uDDFA\uDDFC\uDDFE])|\uD83C\uDDF8(?:\uD83C[\uDDE6-\uDDEA\uDDEC-\uDDF4\uDDF7-\uDDF9\uDDFB\uDDFD-\uDDFF])|\uD83C\uDDEB(?:\uD83C[\uDDEE-\uDDF0\uDDF2\uDDF4\uDDF7])|\uD83C\uDDF5(?:\uD83C[\uDDE6\uDDEA-\uDDED\uDDF0-\uDDF3\uDDF7-\uDDF9\uDDFC\uDDFE])|\uD83C\uDDFB(?:\uD83C[\uDDE6\uDDE8\uDDEA\uDDEC\uDDEE\uDDF3\uDDFA])|\uD83C\uDDF3(?:\uD83C[\uDDE6\uDDE8\uDDEA-\uDDEC\uDDEE\uDDF1\uDDF4\uDDF5\uDDF7\uDDFA\uDDFF])|\uD83C\uDDE8(?:\uD83C[\uDDE6\uDDE8\uDDE9\uDDEB-\uDDEE\uDDF0-\uDDF5\uDDF7\uDDFA-\uDDFF])|\uD83C\uDDF1(?:\uD83C[\uDDE6-\uDDE8\uDDEE\uDDF0\uDDF7-\uDDFB\uDDFE])|\uD83C\uDDFF(?:\uD83C[\uDDE6\uDDF2\uDDFC])|\uD83C\uDDFC(?:\uD83C[\uDDEB\uDDF8])|\uD83C\uDDFA(?:\uD83C[\uDDE6\uDDEC\uDDF2\uDDF3\uDDF8\uDDFE\uDDFF])|\uD83C\uDDEE(?:\uD83C[\uDDE8-\uDDEA\uDDF1-\uDDF4\uDDF6-\uDDF9])|\uD83C\uDDEF(?:\uD83C[\uDDEA\uDDF2\uDDF4\uDDF5])|(?:\uD83C[\uDFC3\uDFC4\uDFCA]|\uD83D[\uDC6E\uDC71\uDC73\uDC77\uDC81\uDC82\uDC86\uDC87\uDE45-\uDE47\uDE4B\uDE4D\uDE4E\uDEA3\uDEB4-\uDEB6]|\uD83E[\uDD26\uDD37-\uDD39\uDD3D\uDD3E\uDDB8\uDDB9\uDDCD-\uDDCF\uDDD6-\uDDDD])(?:\uD83C[\uDFFB-\uDFFF])|(?:\u26F9|\uD83C[\uDFCB\uDFCC]|\uD83D\uDD75)(?:\uD83C[\uDFFB-\uDFFF])|(?:[\u261D\u270A-\u270D]|\uD83C[\uDF85\uDFC2\uDFC7]|\uD83D[\uDC42\uDC43\uDC46-\uDC50\uDC66\uDC67\uDC6B-\uDC6D\uDC70\uDC72\uDC74-\uDC76\uDC78\uDC7C\uDC83\uDC85\uDCAA\uDD74\uDD7A\uDD90\uDD95\uDD96\uDE4C\uDE4F\uDEC0\uDECC]|\uD83E[\uDD0F\uDD18-\uDD1C\uDD1E\uDD1F\uDD30-\uDD36\uDDB5\uDDB6\uDDBB\uDDD2-\uDDD5])(?:\uD83C[\uDFFB-\uDFFF])|(?:[\u231A\u231B\u23E9-\u23EC\u23F0\u23F3\u25FD\u25FE\u2614\u2615\u2648-\u2653\u267F\u2693\u26A1\u26AA\u26AB\u26BD\u26BE\u26C4\u26C5\u26CE\u26D4\u26EA\u26F2\u26F3\u26F5\u26FA\u26FD\u2705\u270A\u270B\u2728\u274C\u274E\u2753-\u2755\u2757\u2795-\u2797\u27B0\u27BF\u2B1B\u2B1C\u2B50\u2B55]|\uD83C[\uDC04\uDCCF\uDD8E\uDD91-\uDD9A\uDDE6-\uDDFF\uDE01\uDE1A\uDE2F\uDE32-\uDE36\uDE38-\uDE3A\uDE50\uDE51\uDF00-\uDF20\uDF2D-\uDF35\uDF37-\uDF7C\uDF7E-\uDF93\uDFA0-\uDFCA\uDFCF-\uDFD3\uDFE0-\uDFF0\uDFF4\uDFF8-\uDFFF]|\uD83D[\uDC00-\uDC3E\uDC40\uDC42-\uDCFC\uDCFF-\uDD3D\uDD4B-\uDD4E\uDD50-\uDD67\uDD7A\uDD95\uDD96\uDDA4\uDDFB-\uDE4F\uDE80-\uDEC5\uDECC\uDED0-\uDED2\uDED5\uDEEB\uDEEC\uDEF4-\uDEFA\uDFE0-\uDFEB]|\uD83E[\uDD0D-\uDD3A\uDD3C-\uDD45\uDD47-\uDD71\uDD73-\uDD76\uDD7A-\uDDA2\uDDA5-\uDDAA\uDDAE-\uDDCA\uDDCD-\uDDFF\uDE70-\uDE73\uDE78-\uDE7A\uDE80-\uDE82\uDE90-\uDE95])|(?:[#\*0-9\xA9\xAE\u203C\u2049\u2122\u2139\u2194-\u2199\u21A9\u21AA\u231A\u231B\u2328\u23CF\u23E9-\u23F3\u23F8-\u23FA\u24C2\u25AA\u25AB\u25B6\u25C0\u25FB-\u25FE\u2600-\u2604\u260E\u2611\u2614\u2615\u2618\u261D\u2620\u2622\u2623\u2626\u262A\u262E\u262F\u2638-\u263A\u2640\u2642\u2648-\u2653\u265F\u2660\u2663\u2665\u2666\u2668\u267B\u267E\u267F\u2692-\u2697\u2699\u269B\u269C\u26A0\u26A1\u26AA\u26AB\u26B0\u26B1\u26BD\u26BE\u26C4\u26C5\u26C8\u26CE\u26CF\u26D1\u26D3\u26D4\u26E9\u26EA\u26F0-\u26F5\u26F7-\u26FA\u26FD\u2702\u2705\u2708-\u270D\u270F\u2712\u2714\u2716\u271D\u2721\u2728\u2733\u2734\u2744\u2747\u274C\u274E\u2753-\u2755\u2757\u2763\u2764\u2795-\u2797\u27A1\u27B0\u27BF\u2934\u2935\u2B05-\u2B07\u2B1B\u2B1C\u2B50\u2B55\u3030\u303D\u3297\u3299]|\uD83C[\uDC04\uDCCF\uDD70\uDD71\uDD7E\uDD7F\uDD8E\uDD91-\uDD9A\uDDE6-\uDDFF\uDE01\uDE02\uDE1A\uDE2F\uDE32-\uDE3A\uDE50\uDE51\uDF00-\uDF21\uDF24-\uDF93\uDF96\uDF97\uDF99-\uDF9B\uDF9E-\uDFF0\uDFF3-\uDFF5\uDFF7-\uDFFF]|\uD83D[\uDC00-\uDCFD\uDCFF-\uDD3D\uDD49-\uDD4E\uDD50-\uDD67\uDD6F\uDD70\uDD73-\uDD7A\uDD87\uDD8A-\uDD8D\uDD90\uDD95\uDD96\uDDA4\uDDA5\uDDA8\uDDB1\uDDB2\uDDBC\uDDC2-\uDDC4\uDDD1-\uDDD3\uDDDC-\uDDDE\uDDE1\uDDE3\uDDE8\uDDEF\uDDF3\uDDFA-\uDE4F\uDE80-\uDEC5\uDECB-\uDED2\uDED5\uDEE0-\uDEE5\uDEE9\uDEEB\uDEEC\uDEF0\uDEF3-\uDEFA\uDFE0-\uDFEB]|\uD83E[\uDD0D-\uDD3A\uDD3C-\uDD45\uDD47-\uDD71\uDD73-\uDD76\uDD7A-\uDDA2\uDDA5-\uDDAA\uDDAE-\uDDCA\uDDCD-\uDDFF\uDE70-\uDE73\uDE78-\uDE7A\uDE80-\uDE82\uDE90-\uDE95])\uFE0F|(?:[\u261D\u26F9\u270A-\u270D]|\uD83C[\uDF85\uDFC2-\uDFC4\uDFC7\uDFCA-\uDFCC]|\uD83D[\uDC42\uDC43\uDC46-\uDC50\uDC66-\uDC78\uDC7C\uDC81-\uDC83\uDC85-\uDC87\uDC8F\uDC91\uDCAA\uDD74\uDD75\uDD7A\uDD90\uDD95\uDD96\uDE45-\uDE47\uDE4B-\uDE4F\uDEA3\uDEB4-\uDEB6\uDEC0\uDECC]|\uD83E[\uDD0F\uDD18-\uDD1F\uDD26\uDD30-\uDD39\uDD3C-\uDD3E\uDDB5\uDDB6\uDDB8\uDDB9\uDDBB\uDDCD-\uDDCF\uDDD1-\uDDDD])/g;
+  };
+  return emojiRegex;
+}
+var hasRequiredStringWidth;
+function requireStringWidth() {
+  if (hasRequiredStringWidth) return stringWidth.exports;
+  hasRequiredStringWidth = 1;
+  const stripAnsi2 = requireStripAnsi();
+  const isFullwidthCodePoint2 = requireIsFullwidthCodePoint();
+  const emojiRegex2 = requireEmojiRegex();
+  const stringWidth$1 = (string) => {
+    if (typeof string !== "string" || string.length === 0) {
+      return 0;
+    }
+    string = stripAnsi2(string);
+    if (string.length === 0) {
+      return 0;
+    }
+    string = string.replace(emojiRegex2(), "  ");
+    let width = 0;
+    for (let i = 0; i < string.length; i++) {
+      const code = string.codePointAt(i);
+      if (code <= 31 || code >= 127 && code <= 159) {
+        continue;
+      }
+      if (code >= 768 && code <= 879) {
+        continue;
+      }
+      if (code > 65535) {
+        i++;
+      }
+      width += isFullwidthCodePoint2(code) ? 2 : 1;
+    }
+    return width;
+  };
+  stringWidth.exports = stringWidth$1;
+  stringWidth.exports.default = stringWidth$1;
+  return stringWidth.exports;
+}
+var formatValue;
+var hasRequiredFormatValue;
+function requireFormatValue() {
+  if (hasRequiredFormatValue) return formatValue;
+  hasRequiredFormatValue = 1;
+  formatValue = function formatValue2(v, options2, type2) {
+    if (options2.autopadding !== true) {
+      return v;
+    }
+    function autopadding(value, length) {
+      return (options2.autopaddingChar + value).slice(-3);
+    }
+    switch (type2) {
+      case "percentage":
+        return autopadding(v);
+      default:
+        return v;
+    }
+  };
+  return formatValue;
+}
+var formatBar;
+var hasRequiredFormatBar;
+function requireFormatBar() {
+  if (hasRequiredFormatBar) return formatBar;
+  hasRequiredFormatBar = 1;
+  formatBar = function formatBar2(progress, options2) {
+    const completeSize = Math.round(progress * options2.barsize);
+    const incompleteSize = options2.barsize - completeSize;
+    return options2.barCompleteString.substr(0, completeSize) + options2.barGlue + options2.barIncompleteString.substr(0, incompleteSize);
+  };
+  return formatBar;
+}
+var formatTime;
+var hasRequiredFormatTime;
+function requireFormatTime() {
+  if (hasRequiredFormatTime) return formatTime;
+  hasRequiredFormatTime = 1;
+  formatTime = function formatTime2(t, options2, roundToMultipleOf) {
+    function round2(input) {
+      if (roundToMultipleOf) {
+        return roundToMultipleOf * Math.round(input / roundToMultipleOf);
+      } else {
+        return input;
+      }
+    }
+    function autopadding(v) {
+      return (options2.autopaddingChar + v).slice(-2);
+    }
+    if (t > 3600) {
+      return autopadding(Math.floor(t / 3600)) + "h" + autopadding(round2(t % 3600 / 60)) + "m";
+    } else if (t > 60) {
+      return autopadding(Math.floor(t / 60)) + "m" + autopadding(round2(t % 60)) + "s";
+    } else if (t > 10) {
+      return autopadding(round2(t)) + "s";
+    } else {
+      return autopadding(t) + "s";
+    }
+  };
+  return formatTime;
+}
+var formatter;
+var hasRequiredFormatter;
+function requireFormatter() {
+  if (hasRequiredFormatter) return formatter;
+  hasRequiredFormatter = 1;
+  const _stringWidth = requireStringWidth();
+  const _defaultFormatValue = requireFormatValue();
+  const _defaultFormatBar = requireFormatBar();
+  const _defaultFormatTime = requireFormatTime();
+  formatter = function defaultFormatter(options2, params, payload) {
+    let s = options2.format;
+    const formatTime2 = options2.formatTime || _defaultFormatTime;
+    const formatValue2 = options2.formatValue || _defaultFormatValue;
+    const formatBar2 = options2.formatBar || _defaultFormatBar;
+    const percentage = Math.floor(params.progress * 100) + "";
+    const stopTime = params.stopTime || Date.now();
+    const elapsedTime = Math.round((stopTime - params.startTime) / 1e3);
+    const context = Object.assign({}, payload, {
+      bar: formatBar2(params.progress, options2),
+      percentage: formatValue2(percentage, options2, "percentage"),
+      total: formatValue2(params.total, options2, "total"),
+      value: formatValue2(params.value, options2, "value"),
+      eta: formatValue2(params.eta, options2, "eta"),
+      eta_formatted: formatTime2(params.eta, options2, 5),
+      duration: formatValue2(elapsedTime, options2, "duration"),
+      duration_formatted: formatTime2(elapsedTime, options2, 1)
+    });
+    s = s.replace(/\{(\w+)\}/g, function(match, key) {
+      if (typeof context[key] !== "undefined") {
+        return context[key];
+      }
+      return match;
+    });
+    const fullMargin = Math.max(0, params.maxWidth - _stringWidth(s) - 2);
+    const halfMargin = Math.floor(fullMargin / 2);
+    switch (options2.align) {
+      // fill start-of-line with whitespaces
+      case "right":
+        s = fullMargin > 0 ? " ".repeat(fullMargin) + s : s;
+        break;
+      // distribute whitespaces to left+right
+      case "center":
+        s = halfMargin > 0 ? " ".repeat(halfMargin) + s : s;
+        break;
+    }
+    return s;
+  };
+  return formatter;
+}
+var options;
+var hasRequiredOptions;
+function requireOptions() {
+  if (hasRequiredOptions) return options;
+  hasRequiredOptions = 1;
+  function mergeOption(v, defaultValue) {
+    if (typeof v === "undefined" || v === null) {
+      return defaultValue;
+    } else {
+      return v;
+    }
+  }
+  options = {
+    // set global options
+    parse: function parse2(rawOptions, preset) {
+      const options2 = {};
+      const opt = Object.assign({}, preset, rawOptions);
+      options2.throttleTime = 1e3 / mergeOption(opt.fps, 10);
+      options2.stream = mergeOption(opt.stream, process.stderr);
+      options2.terminal = mergeOption(opt.terminal, null);
+      options2.clearOnComplete = mergeOption(opt.clearOnComplete, false);
+      options2.stopOnComplete = mergeOption(opt.stopOnComplete, false);
+      options2.barsize = mergeOption(opt.barsize, 40);
+      options2.align = mergeOption(opt.align, "left");
+      options2.hideCursor = mergeOption(opt.hideCursor, false);
+      options2.linewrap = mergeOption(opt.linewrap, false);
+      options2.barGlue = mergeOption(opt.barGlue, "");
+      options2.barCompleteChar = mergeOption(opt.barCompleteChar, "=");
+      options2.barIncompleteChar = mergeOption(opt.barIncompleteChar, "-");
+      options2.format = mergeOption(opt.format, "progress [{bar}] {percentage}% | ETA: {eta}s | {value}/{total}");
+      options2.formatTime = mergeOption(opt.formatTime, null);
+      options2.formatValue = mergeOption(opt.formatValue, null);
+      options2.formatBar = mergeOption(opt.formatBar, null);
+      options2.etaBufferLength = mergeOption(opt.etaBuffer, 10);
+      options2.etaAsynchronousUpdate = mergeOption(opt.etaAsynchronousUpdate, false);
+      options2.progressCalculationRelative = mergeOption(opt.progressCalculationRelative, false);
+      options2.synchronousUpdate = mergeOption(opt.synchronousUpdate, true);
+      options2.noTTYOutput = mergeOption(opt.noTTYOutput, false);
+      options2.notTTYSchedule = mergeOption(opt.notTTYSchedule, 2e3);
+      options2.emptyOnZero = mergeOption(opt.emptyOnZero, false);
+      options2.forceRedraw = mergeOption(opt.forceRedraw, false);
+      options2.autopadding = mergeOption(opt.autopadding, false);
+      options2.gracefulExit = mergeOption(opt.gracefulExit, false);
+      return options2;
+    },
+    // derived options: instance specific, has to be created for every bar element
+    assignDerivedOptions: function assignDerivedOptions(options2) {
+      options2.barCompleteString = options2.barCompleteChar.repeat(options2.barsize + 1);
+      options2.barIncompleteString = options2.barIncompleteChar.repeat(options2.barsize + 1);
+      options2.autopaddingChar = options2.autopadding ? mergeOption(options2.autopaddingChar, "   ") : "";
+      return options2;
+    }
+  };
+  return options;
+}
+var genericBar;
+var hasRequiredGenericBar;
+function requireGenericBar() {
+  if (hasRequiredGenericBar) return genericBar;
+  hasRequiredGenericBar = 1;
+  const _ETA = requireEta();
+  const _Terminal = requireTerminal();
+  const _formatter = requireFormatter();
+  const _options = requireOptions();
+  const _EventEmitter = require$$4$2;
+  genericBar = class GenericBar extends _EventEmitter {
+    constructor(options2) {
+      super();
+      this.options = _options.assignDerivedOptions(options2);
+      this.terminal = this.options.terminal ? this.options.terminal : new _Terminal(this.options.stream);
+      this.value = 0;
+      this.startValue = 0;
+      this.total = 100;
+      this.lastDrawnString = null;
+      this.startTime = null;
+      this.stopTime = null;
+      this.lastRedraw = Date.now();
+      this.eta = new _ETA(this.options.etaBufferLength, 0, 0);
+      this.payload = {};
+      this.isActive = false;
+      this.formatter = typeof this.options.format === "function" ? this.options.format : _formatter;
+    }
+    // internal render function
+    render(forceRendering = false) {
+      const params = {
+        progress: this.getProgress(),
+        eta: this.eta.getTime(),
+        startTime: this.startTime,
+        stopTime: this.stopTime,
+        total: this.total,
+        value: this.value,
+        maxWidth: this.terminal.getWidth()
+      };
+      if (this.options.etaAsynchronousUpdate) {
+        this.updateETA();
+      }
+      const s = this.formatter(this.options, params, this.payload);
+      const forceRedraw = forceRendering || this.options.forceRedraw || this.options.noTTYOutput && !this.terminal.isTTY();
+      if (forceRedraw || this.lastDrawnString != s) {
+        this.emit("redraw-pre");
+        this.terminal.cursorTo(0, null);
+        this.terminal.write(s);
+        this.terminal.clearRight();
+        this.lastDrawnString = s;
+        this.lastRedraw = Date.now();
+        this.emit("redraw-post");
+      }
+    }
+    // start the progress bar
+    start(total, startValue, payload) {
+      this.value = startValue || 0;
+      this.total = typeof total !== "undefined" && total >= 0 ? total : 100;
+      this.startValue = startValue || 0;
+      this.payload = payload || {};
+      this.startTime = Date.now();
+      this.stopTime = null;
+      this.lastDrawnString = "";
+      this.eta = new _ETA(this.options.etaBufferLength, this.startTime, this.value);
+      this.isActive = true;
+      this.emit("start", total, startValue);
+    }
+    // stop the bar
+    stop() {
+      this.isActive = false;
+      this.stopTime = Date.now();
+      this.emit("stop", this.total, this.value);
+    }
+    // update the bar value
+    // update(value, payload)
+    // update(payload)
+    update(arg0, arg1 = {}) {
+      if (typeof arg0 === "number") {
+        this.value = arg0;
+        this.eta.update(Date.now(), arg0, this.total);
+      }
+      const payloadData = (typeof arg0 === "object" ? arg0 : arg1) || {};
+      this.emit("update", this.total, this.value);
+      for (const key in payloadData) {
+        this.payload[key] = payloadData[key];
+      }
+      if (this.value >= this.getTotal() && this.options.stopOnComplete) {
+        this.stop();
+      }
+    }
+    // calculate the actual progress value
+    getProgress() {
+      let progress = this.value / this.total;
+      if (this.options.progressCalculationRelative) {
+        progress = (this.value - this.startValue) / (this.total - this.startValue);
+      }
+      if (isNaN(progress)) {
+        progress = this.options && this.options.emptyOnZero ? 0 : 1;
+      }
+      progress = Math.min(Math.max(progress, 0), 1);
+      return progress;
+    }
+    // update the bar value
+    // increment(delta, payload)
+    // increment(payload)
+    increment(arg0 = 1, arg1 = {}) {
+      if (typeof arg0 === "object") {
+        this.update(this.value + 1, arg0);
+      } else {
+        this.update(this.value + arg0, arg1);
+      }
+    }
+    // get the total (limit) value
+    getTotal() {
+      return this.total;
+    }
+    // set the total (limit) value
+    setTotal(total) {
+      if (typeof total !== "undefined" && total >= 0) {
+        this.total = total;
+      }
+    }
+    // force eta calculation update (long running processes)
+    updateETA() {
+      this.eta.update(Date.now(), this.value, this.total);
+    }
+  };
+  return genericBar;
+}
+var singleBar;
+var hasRequiredSingleBar;
+function requireSingleBar() {
+  if (hasRequiredSingleBar) return singleBar;
+  hasRequiredSingleBar = 1;
+  const _GenericBar = requireGenericBar();
+  const _options = requireOptions();
+  singleBar = class SingleBar extends _GenericBar {
+    constructor(options2, preset) {
+      super(_options.parse(options2, preset));
+      this.timer = null;
+      if (this.options.noTTYOutput && this.terminal.isTTY() === false) {
+        this.options.synchronousUpdate = false;
+      }
+      this.schedulingRate = this.terminal.isTTY() ? this.options.throttleTime : this.options.notTTYSchedule;
+      this.sigintCallback = null;
+    }
+    // internal render function
+    render() {
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      super.render();
+      if (this.options.noTTYOutput && this.terminal.isTTY() === false) {
+        this.terminal.newline();
+      }
+      this.timer = setTimeout(this.render.bind(this), this.schedulingRate);
+    }
+    update(current, payload) {
+      if (!this.timer) {
+        return;
+      }
+      super.update(current, payload);
+      if (this.options.synchronousUpdate && this.lastRedraw + this.options.throttleTime * 2 < Date.now()) {
+        this.render();
+      }
+    }
+    // start the progress bar
+    start(total, startValue, payload) {
+      if (this.options.noTTYOutput === false && this.terminal.isTTY() === false) {
+        return;
+      }
+      if (this.sigintCallback === null && this.options.gracefulExit) {
+        this.sigintCallback = this.stop.bind(this);
+        process.once("SIGINT", this.sigintCallback);
+        process.once("SIGTERM", this.sigintCallback);
+      }
+      this.terminal.cursorSave();
+      if (this.options.hideCursor === true) {
+        this.terminal.cursor(false);
+      }
+      if (this.options.linewrap === false) {
+        this.terminal.lineWrapping(false);
+      }
+      super.start(total, startValue, payload);
+      this.render();
+    }
+    // stop the bar
+    stop() {
+      if (!this.timer) {
+        return;
+      }
+      if (this.sigintCallback) {
+        process.removeListener("SIGINT", this.sigintCallback);
+        process.removeListener("SIGTERM", this.sigintCallback);
+        this.sigintCallback = null;
+      }
+      this.render();
+      super.stop();
+      clearTimeout(this.timer);
+      this.timer = null;
+      if (this.options.hideCursor === true) {
+        this.terminal.cursor(true);
+      }
+      if (this.options.linewrap === false) {
+        this.terminal.lineWrapping(true);
+      }
+      this.terminal.cursorRestore();
+      if (this.options.clearOnComplete) {
+        this.terminal.cursorTo(0, null);
+        this.terminal.clearLine();
+      } else {
+        this.terminal.newline();
+      }
+    }
+  };
+  return singleBar;
+}
+var multiBar;
+var hasRequiredMultiBar;
+function requireMultiBar() {
+  if (hasRequiredMultiBar) return multiBar;
+  hasRequiredMultiBar = 1;
+  const _Terminal = requireTerminal();
+  const _BarElement = requireGenericBar();
+  const _options = requireOptions();
+  const _EventEmitter = require$$4$2;
+  multiBar = class MultiBar extends _EventEmitter {
+    constructor(options2, preset) {
+      super();
+      this.bars = [];
+      this.options = _options.parse(options2, preset);
+      this.options.synchronousUpdate = false;
+      this.terminal = this.options.terminal ? this.options.terminal : new _Terminal(this.options.stream);
+      this.timer = null;
+      this.isActive = false;
+      this.schedulingRate = this.terminal.isTTY() ? this.options.throttleTime : this.options.notTTYSchedule;
+      this.loggingBuffer = [];
+      this.sigintCallback = null;
+    }
+    // add a new bar to the stack
+    create(total, startValue, payload, barOptions = {}) {
+      const bar = new _BarElement(Object.assign(
+        {},
+        // global options
+        this.options,
+        // terminal instance
+        {
+          terminal: this.terminal
+        },
+        // overrides
+        barOptions
+      ));
+      this.bars.push(bar);
+      if (this.options.noTTYOutput === false && this.terminal.isTTY() === false) {
+        return bar;
+      }
+      if (this.sigintCallback === null && this.options.gracefulExit) {
+        this.sigintCallback = this.stop.bind(this);
+        process.once("SIGINT", this.sigintCallback);
+        process.once("SIGTERM", this.sigintCallback);
+      }
+      if (!this.isActive) {
+        if (this.options.hideCursor === true) {
+          this.terminal.cursor(false);
+        }
+        if (this.options.linewrap === false) {
+          this.terminal.lineWrapping(false);
+        }
+        this.timer = setTimeout(this.update.bind(this), this.schedulingRate);
+      }
+      this.isActive = true;
+      bar.start(total, startValue, payload);
+      this.emit("start");
+      return bar;
+    }
+    // remove a bar from the stack
+    remove(bar) {
+      const index = this.bars.indexOf(bar);
+      if (index < 0) {
+        return false;
+      }
+      this.bars.splice(index, 1);
+      this.update();
+      this.terminal.newline();
+      this.terminal.clearBottom();
+      return true;
+    }
+    // internal update routine
+    update() {
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      this.emit("update-pre");
+      this.terminal.cursorRelativeReset();
+      this.emit("redraw-pre");
+      if (this.loggingBuffer.length > 0) {
+        this.terminal.clearLine();
+        while (this.loggingBuffer.length > 0) {
+          this.terminal.write(this.loggingBuffer.shift(), true);
+        }
+      }
+      for (let i = 0; i < this.bars.length; i++) {
+        if (i > 0) {
+          this.terminal.newline();
+        }
+        this.bars[i].render();
+      }
+      this.emit("redraw-post");
+      if (this.options.noTTYOutput && this.terminal.isTTY() === false) {
+        this.terminal.newline();
+        this.terminal.newline();
+      }
+      this.timer = setTimeout(this.update.bind(this), this.schedulingRate);
+      this.emit("update-post");
+      if (this.options.stopOnComplete && !this.bars.find((bar) => bar.isActive)) {
+        this.stop();
+      }
+    }
+    stop() {
+      clearTimeout(this.timer);
+      this.timer = null;
+      if (this.sigintCallback) {
+        process.removeListener("SIGINT", this.sigintCallback);
+        process.removeListener("SIGTERM", this.sigintCallback);
+        this.sigintCallback = null;
+      }
+      this.isActive = false;
+      if (this.options.hideCursor === true) {
+        this.terminal.cursor(true);
+      }
+      if (this.options.linewrap === false) {
+        this.terminal.lineWrapping(true);
+      }
+      this.terminal.cursorRelativeReset();
+      this.emit("stop-pre-clear");
+      if (this.options.clearOnComplete) {
+        this.terminal.clearBottom();
+      } else {
+        for (let i = 0; i < this.bars.length; i++) {
+          if (i > 0) {
+            this.terminal.newline();
+          }
+          this.bars[i].render();
+          this.bars[i].stop();
+        }
+        this.terminal.newline();
+      }
+      this.emit("stop");
+    }
+    log(s) {
+      this.loggingBuffer.push(s);
+    }
+  };
+  return multiBar;
+}
+var legacy;
+var hasRequiredLegacy;
+function requireLegacy() {
+  if (hasRequiredLegacy) return legacy;
+  hasRequiredLegacy = 1;
+  legacy = {
+    format: "progress [{bar}] {percentage}% | ETA: {eta}s | {value}/{total}",
+    barCompleteChar: "=",
+    barIncompleteChar: "-"
+  };
+  return legacy;
+}
+var shadesClassic;
+var hasRequiredShadesClassic;
+function requireShadesClassic() {
+  if (hasRequiredShadesClassic) return shadesClassic;
+  hasRequiredShadesClassic = 1;
+  shadesClassic = {
+    format: " {bar} {percentage}% | ETA: {eta}s | {value}/{total}",
+    barCompleteChar: "█",
+    barIncompleteChar: "░"
+  };
+  return shadesClassic;
+}
+var shadesGrey;
+var hasRequiredShadesGrey;
+function requireShadesGrey() {
+  if (hasRequiredShadesGrey) return shadesGrey;
+  hasRequiredShadesGrey = 1;
+  shadesGrey = {
+    format: " \x1B[90m{bar}\x1B[0m {percentage}% | ETA: {eta}s | {value}/{total}",
+    barCompleteChar: "█",
+    barIncompleteChar: "░"
+  };
+  return shadesGrey;
+}
+var rect;
+var hasRequiredRect;
+function requireRect() {
+  if (hasRequiredRect) return rect;
+  hasRequiredRect = 1;
+  rect = {
+    format: " {bar}■ {percentage}% | ETA: {eta}s | {value}/{total}",
+    barCompleteChar: "■",
+    barIncompleteChar: " "
+  };
+  return rect;
+}
+var presets;
+var hasRequiredPresets;
+function requirePresets() {
+  if (hasRequiredPresets) return presets;
+  hasRequiredPresets = 1;
+  const _legacy = requireLegacy();
+  const _shades_classic = requireShadesClassic();
+  const _shades_grey = requireShadesGrey();
+  const _rect = requireRect();
+  presets = {
+    legacy: _legacy,
+    shades_classic: _shades_classic,
+    shades_grey: _shades_grey,
+    rect: _rect
+  };
+  return presets;
+}
+var cliProgress$1;
+var hasRequiredCliProgress;
+function requireCliProgress() {
+  if (hasRequiredCliProgress) return cliProgress$1;
+  hasRequiredCliProgress = 1;
+  const _SingleBar = requireSingleBar();
+  const _MultiBar = requireMultiBar();
+  const _Presets = requirePresets();
+  const _Formatter = requireFormatter();
+  const _defaultFormatValue = requireFormatValue();
+  const _defaultFormatBar = requireFormatBar();
+  const _defaultFormatTime = requireFormatTime();
+  cliProgress$1 = {
+    Bar: _SingleBar,
+    SingleBar: _SingleBar,
+    MultiBar: _MultiBar,
+    Presets: _Presets,
+    Format: {
+      Formatter: _Formatter,
+      BarFormat: _defaultFormatBar,
+      ValueFormat: _defaultFormatValue,
+      TimeFormat: _defaultFormatTime
+    }
+  };
+  return cliProgress$1;
+}
+var cliProgressExports = requireCliProgress();
+const cliProgress = /* @__PURE__ */ getDefaultExportFromCjs(cliProgressExports);
+const BAR_SIZE = 35;
+const progressBars = /* @__PURE__ */ new Map();
+function createProgressBar(header, total = 0) {
+  const bar = new cliProgress.SingleBar({
+    format: (_options, params, payload) => {
+      const barSize = BAR_SIZE;
+      const progress = params.progress !== void 0 ? params.progress : params.total > 0 ? params.value / params.total : params.value > 0 ? 1 : 0;
+      const filled = Math.min(Math.max(0, Math.round(progress * barSize)), barSize);
+      const barComplete = "#".repeat(barSize);
+      const barIncomplete = "-".repeat(barSize);
+      const barDisplay = "\x1B[32m" + barComplete.substring(0, filled) + "\x1B[0m\x1B[90m" + barIncomplete.substring(0, barSize - filled) + "\x1B[0m";
+      const headerText = payload.header || header;
+      const displayTotal = params.total > 0 ? params.total : params.value;
+      return `\x1B[36m${headerText}\x1B[0m: [${barDisplay}] \x1B[35m${params.value}\x1B[0m/\x1B[35m${displayTotal}\x1B[0m
+`;
+    },
+    hideCursor: true,
+    clearOnComplete: false,
+    stopOnComplete: false,
+    barsize: BAR_SIZE
+  });
+  bar.start(total > 0 ? total : 1, 0, { header });
+  return {
+    bar,
+    current: 0,
+    total: total > 0 ? total : 1,
+    header
+  };
+}
+function initProgress(header, total = 0) {
+  if (progressBars.has(header)) {
+    const instance2 = progressBars.get(header);
+    instance2.bar.stop();
+    progressBars.delete(header);
+  }
+  const instance = createProgressBar(header, total);
+  progressBars.set(header, instance);
+}
+function updateProgress(header, filename) {
+  const instance = progressBars.get(header);
+  if (!instance) {
+    initProgress(header, 0);
+    const newInstance = progressBars.get(header);
+    newInstance.current++;
+    newInstance.total = Math.max(newInstance.total, newInstance.current);
+    newInstance.bar.setTotal(newInstance.total);
+    newInstance.bar.update(newInstance.current, { header, filename });
+    return;
+  }
+  instance.current++;
+  if (instance.total === 0 || instance.current > instance.total) {
+    instance.total = instance.current;
+    instance.bar.setTotal(instance.total);
+  }
+  instance.bar.update(instance.current, { header, filename });
+}
+function initMediaProgress() {
+  initProgress("Media requests", 0);
+}
+function updateMediaProgress(filePath) {
+  const filename = filePath ? filePath.split("/").pop() || filePath : void 0;
+  updateProgress("Media requests", filename);
+}
 function getImageCachePath() {
   const userDataPath = app.getPath("userData");
   return join$1(userDataPath, "image-cache");
@@ -13396,6 +14797,8 @@ const imageCacheHandler = {
       if (cacheIndex[imageUrl]) {
         const localPath2 = cacheIndex[imageUrl].localPath;
         if (await fileExists$1(localPath2)) {
+          const filename2 = generateCacheFilename(imageUrl);
+          updateProgress("📷 Image caching", filename2);
           return localPath2;
         }
         delete cacheIndex[imageUrl];
@@ -13420,7 +14823,7 @@ const imageCacheHandler = {
         cachedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       await saveCacheIndex(cacheIndex);
-      console.log(`  📷 Cached: ${filename}`);
+      updateProgress("📷 Image caching", filename);
       return localPath;
     } catch (error) {
       console.error(`Error caching image ${imageUrl}:`, error);
@@ -13433,6 +14836,9 @@ const imageCacheHandler = {
   async cacheImages(urls) {
     const results = /* @__PURE__ */ new Map();
     const validUrls = urls.filter((url) => !!url);
+    if (validUrls.length > 0) {
+      initProgress("📷 Image caching", validUrls.length);
+    }
     const batchSize = 5;
     for (let i = 0; i < validUrls.length; i += batchSize) {
       const batch = validUrls.slice(i, i + batchSize);
@@ -13446,7 +14852,7 @@ const imageCacheHandler = {
         results.set(url, localPath);
       }
       if (i + batchSize < validUrls.length) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve2) => setTimeout(resolve2, 100));
       }
     }
     return results;
@@ -13530,6 +14936,75 @@ const imageCacheHandler = {
     }
   },
   /**
+   * Delete cached images for a specific series
+   */
+  async deleteSeriesImages(seriesData) {
+    try {
+      const cacheIndex = await loadCacheIndex();
+      const imageUrls = [
+        seriesData.poster,
+        seriesData.banner
+      ];
+      if (seriesData.episodes) {
+        for (const ep of seriesData.episodes) {
+          if (ep.thumbnail) {
+            imageUrls.push(ep.thumbnail);
+          }
+        }
+      }
+      let deletedCount = 0;
+      for (const url of imageUrls) {
+        if (!url) continue;
+        const entry = cacheIndex[url];
+        if (entry) {
+          try {
+            if (await fileExists$1(entry.localPath)) {
+              await rm(entry.localPath, { force: true });
+              deletedCount++;
+            }
+            delete cacheIndex[url];
+          } catch (error) {
+            console.error(`Error deleting cached image ${entry.localPath}:`, error);
+          }
+        }
+      }
+      const localPaths = [
+        seriesData.posterLocal,
+        seriesData.bannerLocal
+      ];
+      if (seriesData.episodes) {
+        for (const ep of seriesData.episodes) {
+          if (ep.thumbnailLocal) {
+            localPaths.push(ep.thumbnailLocal);
+          }
+        }
+      }
+      for (const localPath of localPaths) {
+        if (!localPath) continue;
+        const actualPath = localPath.startsWith("media://") ? decodeURIComponent(localPath.replace("media://", "")) : localPath;
+        try {
+          if (await fileExists$1(actualPath)) {
+            await rm(actualPath, { force: true });
+            deletedCount++;
+          }
+        } catch (error) {
+          console.error(`Error deleting local image ${actualPath}:`, error);
+        }
+        for (const [url, entry] of Object.entries(cacheIndex)) {
+          if (entry.localPath === actualPath) {
+            delete cacheIndex[url];
+            break;
+          }
+        }
+      }
+      await saveCacheIndex(cacheIndex);
+      console.log(`Deleted ${deletedCount} cached images for series`);
+    } catch (error) {
+      console.error("Error deleting series images:", error);
+      throw error;
+    }
+  },
+  /**
    * Get the base cache directory path
    */
   getCachePath() {
@@ -13562,14 +15037,31 @@ function generateThumbnailFilename(videoPath, timestamp) {
   const hash = createHash("md5").update(`${videoPath}_${timestamp}`).digest("hex");
   return `${hash}.jpg`;
 }
-async function extractFrame(videoPath, timestamp = 120) {
+async function extractFrame(videoPath, timestamp = 120, resetProgress = false) {
   await ensureThumbnailDirectory();
   const thumbnailFilename = generateThumbnailFilename(videoPath, timestamp);
   const thumbnailPath = join$1(getThumbnailCachePath(), thumbnailFilename);
+  if (resetProgress) {
+    initProgress("🎬 Generating thumbnails", 0);
+  }
   if (await fileExists(thumbnailPath)) {
+    const filename = basename(videoPath);
+    updateProgress("🎬 Generating thumbnails", filename);
     return thumbnailPath;
   }
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
+    let resolved = false;
+    let timeoutId = null;
+    const safeResolve = (value) => {
+      if (!resolved) {
+        resolved = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        resolve2(value);
+      }
+    };
     const ffmpeg = spawn("ffmpeg", [
       "-ss",
       String(timestamp),
@@ -13589,26 +15081,31 @@ async function extractFrame(videoPath, timestamp = 120) {
       // Suppress ffmpeg output
     });
     ffmpeg.on("close", async (code) => {
+      if (resolved) return;
       if (code === 0 && await fileExists(thumbnailPath)) {
-        console.log(`  🎬 Generated thumbnail: ${thumbnailFilename}`);
-        resolve(thumbnailPath);
+        const filename = basename(videoPath);
+        updateProgress("🎬 Generating thumbnails", filename);
+        safeResolve(thumbnailPath);
       } else {
         if (timestamp > 10) {
-          const retryResult = await extractFrame(videoPath, 10);
-          resolve(retryResult);
+          const retryResult = await extractFrame(videoPath, 10, false);
+          safeResolve(retryResult);
         } else {
-          console.log(`  ⚠️ Failed to generate thumbnail for: ${videoPath}`);
-          resolve(null);
+          const filename = basename(videoPath);
+          updateProgress("🎬 Generating thumbnails", filename);
+          safeResolve(null);
         }
       }
     });
     ffmpeg.on("error", (err) => {
+      if (resolved) return;
       console.error(`  ⚠️ ffmpeg error: ${err.message}`);
-      resolve(null);
+      safeResolve(null);
     });
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
+      if (resolved) return;
       ffmpeg.kill();
-      resolve(null);
+      safeResolve(null);
     }, 3e4);
   });
 }
@@ -13617,11 +15114,12 @@ const thumbnailHandler = {
    * Generate a thumbnail for an episode from the video file
    * @param videoPath Path to the video file
    * @param timestamp Timestamp in seconds (default: 120 = 2 minutes)
+   * @param resetProgressBar Reset the progress bar (use true for first thumbnail in a batch)
    */
-  async generateThumbnail(videoPath, timestamp = 120) {
+  async generateThumbnail(videoPath, timestamp = 120, resetProgressBar = true) {
     if (!videoPath) return null;
     try {
-      return await extractFrame(videoPath, timestamp);
+      return await extractFrame(videoPath, timestamp, resetProgressBar);
     } catch (error) {
       console.error(`Error generating thumbnail for ${videoPath}:`, error);
       return null;
@@ -13649,25 +15147,40 @@ const thumbnailHandler = {
    * Check if ffmpeg is available
    */
   async isFFmpegAvailable() {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const ffmpeg = spawn("ffmpeg", ["-version"], {
         stdio: ["ignore", "ignore", "ignore"]
       });
       ffmpeg.on("close", (code) => {
-        resolve(code === 0);
+        resolve2(code === 0);
       });
       ffmpeg.on("error", () => {
-        resolve(false);
+        resolve2(false);
       });
       setTimeout(() => {
         ffmpeg.kill();
-        resolve(false);
+        resolve2(false);
       }, 5e3);
     });
   }
 };
 const __filename$1 = fileURLToPath(import.meta.url);
 const __dirname$1 = dirname(__filename$1);
+function isRateLimitError(error) {
+  if (axios.isAxiosError(error)) {
+    return error.response?.status === 429;
+  }
+  if (error && typeof error === "object") {
+    const err = error;
+    if (err.response?.status === 429 || err.statusCode === 429) {
+      return true;
+    }
+    if (err.message && /rate.?limit/i.test(err.message)) {
+      return true;
+    }
+  }
+  return false;
+}
 let mainWindow = null;
 function createWindow() {
   Menu.setApplicationMenu(null);
@@ -13713,12 +15226,47 @@ protocol.registerSchemesAsPrivileged([
   }
 ]);
 app.whenReady().then(() => {
+  initMediaProgress();
   protocol.handle("media", async (request2) => {
     let filePath = request2.url.replace(/^media:\/\//, "");
     filePath = decodeURIComponent(filePath);
-    if (!filePath.startsWith("/")) {
-      filePath = "/" + filePath;
+    if (!isAbsolute(filePath)) {
+      if (process.platform !== "win32") {
+        filePath = "/" + filePath;
+      } else {
+        console.error("Rejected relative path:", filePath);
+        return new Response("Invalid path: relative paths not allowed", { status: 403 });
+      }
     }
+    try {
+      const normalizedPath = resolve(filePath);
+      const userDataPath = app.getPath("userData");
+      const normalizedUserData = resolve(userDataPath);
+      const userDataRelative = relative(normalizedUserData, normalizedPath);
+      const isInUserData = !userDataRelative.startsWith("..") && !userDataRelative.startsWith("/");
+      const allowedSources = await configHandler.getFolderSources();
+      const isInAllowedSource = allowedSources.some((source) => {
+        try {
+          const normalizedSource = resolve(source);
+          const relativePath = relative(normalizedSource, normalizedPath);
+          return !relativePath.startsWith("..") && !relativePath.startsWith("/");
+        } catch {
+          return false;
+        }
+      });
+      if (!isInUserData && !isInAllowedSource) {
+        if (allowedSources.length === 0 && !isInUserData) {
+          console.error("Access denied: path not in userData and no folder sources configured");
+          return new Response("Access denied: path not in allowed directories", { status: 403 });
+        }
+        console.error("Access denied for path:", filePath);
+        return new Response("Access denied: path not in allowed directories", { status: 403 });
+      }
+    } catch (error) {
+      console.error("Error validating path:", error);
+      return new Response("Error validating path", { status: 500 });
+    }
+    updateMediaProgress(filePath);
     if (!existsSync(filePath)) {
       console.error("File not found:", filePath);
       return new Response("File not found", { status: 404 });
@@ -13844,26 +15392,30 @@ ipcMain.handle("fetch-metadata", async (_event, searchName, seasonNumber) => {
   try {
     const malData = await malHandler.searchAndFetchMetadata(searchName, seasonNumber);
     if (malData) {
-      console.log(`  ✓ Found on MAL: ${malData.title}`);
+      console.log(`  \x1B[32m✓\x1B[0m Found on MAL: \x1B[36m${malData.title}\x1B[0m`);
       return { ...malData, source: "mal" };
     } else {
-      console.log(`  ✗ MAL returned no results for "${searchName}"${seasonInfo}`);
+      console.log(`  \x1B[31m✗\x1B[0m MAL returned no results for "${searchName}"${seasonInfo}`);
     }
   } catch (error) {
-    console.log(`  ✗ MAL failed:`, error);
+    if (!isRateLimitError(error)) {
+      console.log(`  \x1B[31m✗\x1B[0m MAL failed:`, error);
+    }
   }
   try {
     const anilistData = await anilistHandler.searchAndFetchMetadata(searchName, seasonNumber);
     if (anilistData) {
-      console.log(`  ✓ Found on AniList (fallback): ${anilistData.title}`);
+      console.log(`  \x1B[32m✓\x1B[0m Found on AniList (fallback): \x1B[36m${anilistData.title}\x1B[0m`);
       return { ...anilistData, source: "anilist" };
     } else {
-      console.log(`  ✗ AniList returned no results for "${searchName}"${seasonInfo}`);
+      console.log(`  \x1B[31m✗\x1B[0m AniList returned no results for "${searchName}"${seasonInfo}`);
     }
   } catch (error) {
-    console.log(`  ✗ AniList failed:`, error);
+    if (!isRateLimitError(error)) {
+      console.log(`  \x1B[31m✗\x1B[0m AniList failed:`, error);
+    }
   }
-  console.log(`  ✗ No metadata found for: "${searchName}"${seasonInfo}`);
+  console.log(`  \x1B[31m✗\x1B[0m No metadata found for: "\x1B[36m${searchName}\x1B[0m"${seasonInfo}`);
   return null;
 });
 ipcMain.handle("fetch-mal-metadata", async (_event, seriesName, seasonNumber) => {
@@ -13906,6 +15458,20 @@ ipcMain.handle("clear-metadata", async () => {
     throw error;
   }
 });
+ipcMain.handle("delete-series", async (_event, seriesId) => {
+  try {
+    const seriesData = await metadataHandler.getSeriesMetadata(seriesId);
+    if (seriesData) {
+      await imageCacheHandler.deleteSeriesImages(seriesData);
+    }
+    await metadataHandler.deleteSeriesMetadata(seriesId);
+    console.log(`Deleted series: ${seriesId}`);
+    return true;
+  } catch (error) {
+    console.error("Error deleting series:", error);
+    throw error;
+  }
+});
 ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
   try {
     console.log(`
@@ -13929,57 +15495,81 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
       }
       const existing = existingMetadata[mediaId];
       if (existing?.title && existing?.posterLocal) {
-        console.log(`Using cached metadata for: ${media.name}`);
-        let cachedTitle = existing.title;
-        if (media.seasonNumber !== null && media.seasonNumber !== void 0) {
-          const seasonPattern = /\(Season\s*\d+\)/i;
-          if (!seasonPattern.test(cachedTitle)) {
-            cachedTitle = `${cachedTitle} (Season ${media.seasonNumber})`;
-          }
-        }
-        newMetadata[mediaId] = {
-          ...existing,
-          seriesId: mediaId,
-          title: cachedTitle,
-          fileEpisodes: media.files.map((f) => ({
-            episodeNumber: f.episodeNumber,
-            seasonNumber: f.seasonNumber,
-            filePath: f.filePath,
-            subtitlePath: f.subtitlePath,
-            subtitlePaths: f.subtitlePaths,
-            filename: f.filename,
-            title: f.title
-          })),
-          folderPath: media.folderPath,
-          type: media.type
+        const cachedTitle = existing.title.toLowerCase().trim();
+        const seriesNameLower = media.name.toLowerCase().trim();
+        const normalizeForComparison = (title) => {
+          return title.replace(/\s*\(season\s*\d+\)/gi, "").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
         };
-        continue;
+        const normalizedCached = normalizeForComparison(cachedTitle);
+        const normalizedSeries = normalizeForComparison(seriesNameLower);
+        const titlesMatch = normalizedCached === normalizedSeries || normalizedSeries.length >= 5 && (normalizedCached.includes(normalizedSeries) || normalizedSeries.includes(normalizedCached));
+        if (!titlesMatch && normalizedSeries.length >= 3) {
+          console.log(`  ⚠️  Cached metadata title "${cachedTitle}" doesn't match series name "${seriesNameLower}"`);
+          console.log(`  🔄 Re-fetching metadata for: ${media.name}`);
+          delete newMetadata[mediaId];
+        } else if (titlesMatch) {
+          console.log(`Using cached metadata for: ${media.name}`);
+          let finalTitle = existing.title;
+          if (media.seasonNumber !== null && media.seasonNumber !== void 0) {
+            const seasonPattern = /\(Season\s*\d+\)/i;
+            if (!seasonPattern.test(finalTitle)) {
+              finalTitle = `${finalTitle} (Season ${media.seasonNumber})`;
+            }
+          }
+          newMetadata[mediaId] = {
+            ...existing,
+            seriesId: mediaId,
+            title: finalTitle,
+            fileEpisodes: media.files.map((f) => ({
+              episodeNumber: f.episodeNumber,
+              seasonNumber: f.seasonNumber,
+              filePath: f.filePath,
+              subtitlePath: f.subtitlePath,
+              subtitlePaths: f.subtitlePaths,
+              filename: f.filename,
+              title: f.title
+            })),
+            folderPath: media.folderPath,
+            type: media.type
+          };
+          continue;
+        }
       }
       const seasonInfo = media.seasonNumber !== null ? ` Season ${media.seasonNumber}` : "";
-      console.log(`Fetching metadata for: ${media.name}${seasonInfo} (${media.type})`);
+      const partInfo = media.partNumber !== null ? ` Part ${media.partNumber}` : "";
+      console.log(`Fetching metadata for: ${media.name}${seasonInfo}${partInfo} (${media.type})`);
+      const canonicalEpisodes = media.files.filter((f) => {
+        return Number.isInteger(f.episodeNumber);
+      });
+      const canonicalEpisodeCount = canonicalEpisodes.length;
+      console.log(`  📁 Folder has ${canonicalEpisodeCount} canonical episode${canonicalEpisodeCount !== 1 ? "s" : ""} (${media.files.length} total files including decimal episodes)`);
       let fetchedMetadata = null;
       try {
-        fetchedMetadata = await malHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
+        fetchedMetadata = await malHandler.searchAndFetchMetadata(media.name, media.seasonNumber, media.partNumber, canonicalEpisodeCount);
         if (fetchedMetadata) {
-          console.log(`  ✓ Found on MAL: ${fetchedMetadata.title}`);
+          console.log(`  \x1B[32m✓\x1B[0m Found on MAL: \x1B[36m${fetchedMetadata.title}\x1B[0m (${fetchedMetadata.totalEpisodes || "unknown"} episodes)`);
           fetchedMetadata = { ...fetchedMetadata, source: "mal" };
         } else {
-          console.log(`  ✗ MAL returned no results for ${media.name}${seasonInfo}`);
+          console.log(`  \x1B[31m✗\x1B[0m MAL returned no results for ${media.name}${seasonInfo}`);
         }
       } catch (err) {
-        console.log(`  ✗ MAL failed for ${media.name}${seasonInfo}:`, err);
+        if (!isRateLimitError(err)) {
+          console.log(`  \x1B[31m✗\x1B[0m MAL failed for ${media.name}${seasonInfo}:`, err);
+        }
       }
       if (!fetchedMetadata) {
         try {
-          fetchedMetadata = await anilistHandler.searchAndFetchMetadata(media.name, media.seasonNumber);
+          fetchedMetadata = await anilistHandler.searchAndFetchMetadata(media.name, media.seasonNumber, media.partNumber, canonicalEpisodeCount);
           if (fetchedMetadata) {
-            console.log(`  ✓ Found on AniList (fallback): ${fetchedMetadata.title}`);
+            console.log(`  \x1B[32m✓\x1B[0m Found on AniList (fallback): \x1B[36m${fetchedMetadata.title}\x1B[0m (${fetchedMetadata.totalEpisodes || "unknown"} episodes)`);
             fetchedMetadata = { ...fetchedMetadata, source: "anilist" };
           } else {
-            console.log(`  ✗ AniList returned no results for ${media.name}${seasonInfo}`);
+            console.log(`  \x1B[31m✗\x1B[0m AniList returned no results for ${media.name}${seasonInfo}`);
           }
         } catch (err) {
-          console.log(`  ✗ AniList failed for ${media.name}${seasonInfo}:`, err);
+          if (!isRateLimitError(err)) {
+            console.log(`  \x1B[31m✗\x1B[0m AniList failed for ${media.name}${seasonInfo}:`, err);
+          }
         }
       }
       if (fetchedMetadata) {
@@ -14004,6 +15594,7 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
           fileEpisodeMap.set(key, f.filePath);
         }
         const episodesWithLocalThumbs = [];
+        let firstThumbnailInBatch = true;
         for (const ep of fetchedMetadata.episodes || []) {
           let thumbnailLocal = null;
           if (ep.thumbnail) {
@@ -14018,21 +15609,44 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
             }
             if (!videoPath) {
               for (const [mapKey, path] of fileEpisodeMap.entries()) {
-                if (mapKey.endsWith(`_${ep.episodeNumber}`)) {
+                const keyParts = mapKey.split("_");
+                const keyEpisodeNum = parseFloat(keyParts[keyParts.length - 1]);
+                if (keyEpisodeNum === ep.episodeNumber) {
                   videoPath = path;
                   break;
                 }
               }
             }
             if (videoPath) {
-              console.log(`  🎬 Generating thumbnail for episode ${ep.episodeNumber}${epSeason !== null ? ` (Season ${epSeason})` : ""}...`);
-              thumbnailLocal = await thumbnailHandler.generateThumbnail(videoPath, 120);
+              thumbnailLocal = await thumbnailHandler.generateThumbnail(videoPath, 120, firstThumbnailInBatch);
+              firstThumbnailInBatch = false;
             }
           }
           episodesWithLocalThumbs.push({
             ...ep,
             thumbnailLocal
           });
+        }
+        const processedEpisodeNumbers = new Set(episodesWithLocalThumbs.map((ep) => ep.episodeNumber));
+        for (const fileEp of media.files) {
+          if (!Number.isInteger(fileEp.episodeNumber) && !processedEpisodeNumbers.has(fileEp.episodeNumber)) {
+            const epSeason = fileEp.seasonNumber ?? null;
+            let thumbnailLocal = null;
+            try {
+              thumbnailLocal = await thumbnailHandler.generateThumbnail(fileEp.filePath, 120, false);
+            } catch (err) {
+              console.warn(`Failed to generate thumbnail for decimal episode ${fileEp.episodeNumber}:`, err);
+            }
+            episodesWithLocalThumbs.push({
+              episodeNumber: fileEp.episodeNumber,
+              seasonNumber: epSeason ?? void 0,
+              title: `Episode ${fileEp.episodeNumber.toFixed(1)}`,
+              description: null,
+              airDate: null,
+              thumbnail: null,
+              thumbnailLocal
+            });
+          }
         }
         let finalTitle = fetchedMetadata.title;
         if (media.seasonNumber !== null && media.seasonNumber !== void 0) {
@@ -14060,13 +15674,14 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
           folderPath: media.folderPath,
           type: media.type
         };
-        console.log(`  ✓ Found: ${finalTitle}`);
+        console.log(`  \x1B[32m✓\x1B[0m Found: \x1B[36m${finalTitle}\x1B[0m`);
       } else {
-        console.log(`  ✗ No online metadata, generating local thumbnails: ${media.name}`);
+        console.log(`  \x1B[31m✗\x1B[0m No online metadata, generating local thumbnails: \x1B[36m${media.name}\x1B[0m`);
         const localEpisodes = [];
+        let firstThumbnail = true;
         for (const f of media.files) {
-          console.log(`  🎬 Generating thumbnail for episode ${f.episodeNumber}${f.seasonNumber !== null ? ` (Season ${f.seasonNumber})` : ""}...`);
-          const thumbnailLocal = await thumbnailHandler.generateThumbnail(f.filePath, 120);
+          const thumbnailLocal = await thumbnailHandler.generateThumbnail(f.filePath, 120, firstThumbnail);
+          firstThumbnail = false;
           localEpisodes.push({
             episodeNumber: f.episodeNumber,
             seasonNumber: f.seasonNumber,
@@ -14108,7 +15723,7 @@ ipcMain.handle("scan-and-fetch-metadata", async (_event, folderPath) => {
           source: "local"
         };
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve2) => setTimeout(resolve2, 500));
     }
     const mergedMetadata = { ...existingMetadata };
     for (const [seriesId, seriesData] of Object.entries(newMetadata)) {

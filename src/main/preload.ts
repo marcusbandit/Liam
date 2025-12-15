@@ -26,7 +26,6 @@ export interface ElectronAPI {
   fetchMetadata: (seriesName: string) => Promise<unknown>;
   fetchAnilistMetadata: (seriesName: string) => Promise<unknown>;
   fetchMALMetadata: (seriesName: string) => Promise<unknown>;
-  fetchTVDBMetadata: (seriesName: string) => Promise<unknown>;
   saveMetadata: (metadata: Record<string, unknown>) => Promise<boolean>;
   loadMetadata: () => Promise<Record<string, unknown>>;
   clearMetadata: () => Promise<boolean>;

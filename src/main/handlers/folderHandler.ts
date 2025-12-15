@@ -521,6 +521,19 @@ const folderHandler = {
       throw new Error('Folder path is required');
     }
 
+    // Validate path exists and is accessible
+    try {
+      const stats = await stat(folderPath);
+      if (!stats.isDirectory()) {
+        throw new Error(`Path is not a directory: ${folderPath}`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`Folder does not exist: ${folderPath}`);
+      }
+      throw error;
+    }
+
     return await scanDirectory(folderPath);
   },
 

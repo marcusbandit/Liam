@@ -240,7 +240,7 @@ const anilistHandler = {
     let retries = 0;
     const maxRetries = 3;
     
-    while (retries <= maxRetries) {
+    while (retries < maxRetries) {
       try {
         const variables = { search: searchTerm, page: 1, perPage: limit };
         const data = await request<{ Page: { media: AniListMedia[] } }>(ANILIST_API_URL, SEARCH_MULTIPLE_QUERY, variables);
@@ -249,7 +249,7 @@ const anilistHandler = {
       } catch (error) {
         if (isRateLimitError(error) && retries < maxRetries) {
           retries++;
-          const delaySeconds = retries * 1; // 2, 4, 6 seconds
+          const delaySeconds = retries * 2; // 2, 4, 6 seconds
           console.log(`  \x1b[33m⏳ Rate limited while searching AniList. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1b[0m`);
           await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
         } else {
@@ -376,14 +376,14 @@ const anilistHandler = {
             let episodes: EpisodeMetadata[];
             let retries = 0;
             const maxRetries = 3;
-            while (retries <= maxRetries) {
+            while (retries < maxRetries) {
               try {
                 episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
                 break;
               } catch (error) {
                 if (isRateLimitError(error) && retries < maxRetries) {
                   retries++;
-                  const delaySeconds = retries * 1; // 2, 4, 6 seconds
+                  const delaySeconds = retries * 2; // 2, 4, 6 seconds
                   console.log(`  \x1b[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1b[0m`);
                   await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
                 } else {
@@ -407,14 +407,14 @@ const anilistHandler = {
                 let episodes: EpisodeMetadata[];
                 let retries = 0;
                 const maxRetries = 3;
-                while (retries <= maxRetries) {
+                while (retries < maxRetries) {
                   try {
                     episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
                     break;
                   } catch (error) {
                     if (isRateLimitError(error) && retries < maxRetries) {
                       retries++;
-                      const delaySeconds = retries * 1;
+                      const delaySeconds = retries * 2; // 2, 4, 6 seconds
                       console.log(`  \x1b[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1b[0m`);
                       await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
                     } else {
@@ -452,14 +452,14 @@ const anilistHandler = {
         let episodes: EpisodeMetadata[];
         let retries = 0;
         const maxRetries = 3;
-        while (retries <= maxRetries) {
+        while (retries < maxRetries) {
           try {
             episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
             break;
           } catch (error) {
             if (isRateLimitError(error) && retries < maxRetries) {
               retries++;
-              const delaySeconds = retries * 1; // 2, 4, 6 seconds
+              const delaySeconds = retries * 2; // 2, 4, 6 seconds
               console.log(`  \x1b[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1b[0m`);
               await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
             } else {
@@ -483,14 +483,14 @@ const anilistHandler = {
             let episodes: EpisodeMetadata[];
             let retries = 0;
             const maxRetries = 3;
-            while (retries <= maxRetries) {
+            while (retries < maxRetries) {
               try {
                 episodes = await this.getEpisodes(media.id, media.episodes, seasonNumber);
                 break;
               } catch (error) {
                 if (isRateLimitError(error) && retries < maxRetries) {
                   retries++;
-                  const delaySeconds = retries * 1;
+                  const delaySeconds = retries * 2; // 2, 4, 6 seconds
                   console.log(`  \x1b[33m⏳ Rate limited while fetching episodes. Waiting ${delaySeconds}s before retry ${retries}/${maxRetries}...\x1b[0m`);
                   await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
                 } else {

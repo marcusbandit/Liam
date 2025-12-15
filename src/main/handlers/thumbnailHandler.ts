@@ -59,6 +59,21 @@ async function extractFrame(videoPath: string, timestamp: number = 120, resetPro
   }
   
   return new Promise((resolve) => {
+    // Track if promise has already resolved to prevent race conditions
+    let resolved = false;
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    const safeResolve = (value: string | null) => {
+      if (!resolved) {
+        resolved = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        resolve(value);
+      }
+    };
+
     // Use ffmpeg to extract a frame
     // -ss: seek to timestamp
     // -i: input file
@@ -78,33 +93,37 @@ async function extractFrame(videoPath: string, timestamp: number = 120, resetPro
     });
 
     ffmpeg.on('close', async (code) => {
+      if (resolved) return; // Already resolved by timeout or error
+      
       if (code === 0 && await fileExists(thumbnailPath)) {
         const filename = basename(videoPath);
         updateProgress('🎬 Generating thumbnails', filename);
-        resolve(thumbnailPath);
+        safeResolve(thumbnailPath);
       } else {
         // If seeking to 2 min fails (video too short), try 10 seconds
         if (timestamp > 10) {
           const retryResult = await extractFrame(videoPath, 10, false);
-          resolve(retryResult);
+          safeResolve(retryResult);
         } else {
           // Still update progress even on failure
           const filename = basename(videoPath);
           updateProgress('🎬 Generating thumbnails', filename);
-          resolve(null);
+          safeResolve(null);
         }
       }
     });
 
     ffmpeg.on('error', (err) => {
+      if (resolved) return; // Already resolved
       console.error(`  ⚠️ ffmpeg error: ${err.message}`);
-      resolve(null);
+      safeResolve(null);
     });
 
     // Timeout after 30 seconds
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
+      if (resolved) return; // Already resolved
       ffmpeg.kill();
-      resolve(null);
+      safeResolve(null);
     }, 30000);
   });
 }

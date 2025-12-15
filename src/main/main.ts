@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, protocol, net } from 'electron';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, isAbsolute, resolve, relative } from 'path';
 import { existsSync } from 'fs';
 import axios from 'axios';
 import folderHandler from './handlers/folderHandler';
@@ -101,9 +101,49 @@ app.whenReady().then(() => {
     let filePath = request.url.replace(/^media:\/\//, '');
     filePath = decodeURIComponent(filePath);
 
-    // Ensure path starts with / for absolute paths
-    if (!filePath.startsWith('/')) {
-      filePath = '/' + filePath;
+    // Cross-platform path handling: ensure absolute paths
+    if (!isAbsolute(filePath)) {
+      // Only add leading / for Unix-like systems (Linux, macOS)
+      if (process.platform !== 'win32') {
+        filePath = '/' + filePath;
+      } else {
+        // On Windows, reject relative paths for security
+        console.error('Rejected relative path:', filePath);
+        return new Response('Invalid path: relative paths not allowed', { status: 403 });
+      }
+    }
+
+    // SECURITY: Validate path is within allowed folder sources OR app's userData directory
+    try {
+      const normalizedPath = resolve(filePath);
+      
+      const userDataPath = app.getPath('userData');
+      const normalizedUserData = resolve(userDataPath);
+      const userDataRelative = relative(normalizedUserData, normalizedPath);
+      const isInUserData = !userDataRelative.startsWith('..') && !userDataRelative.startsWith('/');
+      
+      const allowedSources = await configHandler.getFolderSources();
+      const isInAllowedSource = allowedSources.some(source => {
+        try {
+          const normalizedSource = resolve(source);
+          const relativePath = relative(normalizedSource, normalizedPath);
+          return !relativePath.startsWith('..') && !relativePath.startsWith('/');
+        } catch {
+          return false;
+        }
+      });
+
+      if (!isInUserData && !isInAllowedSource) {
+        if (allowedSources.length === 0 && !isInUserData) {
+          console.error('Access denied: path not in userData and no folder sources configured');
+          return new Response('Access denied: path not in allowed directories', { status: 403 });
+        }
+        console.error('Access denied for path:', filePath);
+        return new Response('Access denied: path not in allowed directories', { status: 403 });
+      }
+    } catch (error) {
+      console.error('Error validating path:', error);
+      return new Response('Error validating path', { status: 500 });
     }
 
     updateMediaProgress(filePath); // Debug progress bar update

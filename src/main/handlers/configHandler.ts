@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { app } from 'electron';
+import { stat } from 'fs/promises';
 
 export interface AppConfig {
   folderSources: string[];
@@ -62,6 +63,23 @@ const configHandler = {
 
   async addFolderSource(folderPath: string): Promise<boolean> {
     try {
+      // Validate folder path exists and is a directory
+      if (!folderPath || typeof folderPath !== 'string' || folderPath.trim().length === 0) {
+        throw new Error('Folder path is required and must be a non-empty string');
+      }
+
+      try {
+        const stats = await stat(folderPath);
+        if (!stats.isDirectory()) {
+          throw new Error(`Path is not a directory: ${folderPath}`);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(`Folder does not exist: ${folderPath}`);
+        }
+        throw error;
+      }
+
       const config = await this.loadConfig();
       if (!config.folderSources.includes(folderPath)) {
         config.folderSources.push(folderPath);

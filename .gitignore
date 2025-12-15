@@ -35,3 +35,4 @@ src/data/
 !package-lock.json
 !tsconfig.json
 .vite/build/main.js
+.vite/build/preload.js
